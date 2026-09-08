@@ -17,6 +17,8 @@ export function validateCommitment(order, batches) {
   return { total, partial: total < openQty(order), eta: [...batches].sort((a,b) => a.date.localeCompare(b.date)).at(-1).date }
 }
 export function seedOrders() {
+  const prices = [32, 35, 2450, 185, 28, 112, 680, 420, 4.5, 65, 12]
+  const created = ['2026-09-01','2026-09-01','2026-06-05','2026-07-15','2026-08-18','2026-08-10','2026-07-01','2026-08-04','2026-08-01','2026-09-02','2026-08-27']
   const rows = [
     ['450051727','00090','P135-01703','纱门帘 · 中门','Mosquito net curtain / middle door','Longtree','Karen A.','售后配件',120,0,0,'2026-09-18','', '待确认','海运',0],
     ['450051727','00100','P135-01710','纱门帘 · 后门','Mosquito net curtain / rear door','Longtree','Karen A.','售后配件',80,0,0,'2026-09-18','', '待确认','海运',0],
@@ -32,10 +34,10 @@ export function seedOrders() {
   ]
   return rows.map((r,i) => ({
     id: `${r[0]}-${r[1]}`, po:r[0], item:r[1], part:r[2], name:r[3], en:r[4], supplier:r[5], buyer:r[6], type:r[7], qty:r[8], received:r[9], shipped:r[10], required:r[11], eta:r[12], status:r[13], mode:r[14], progress:r[15],
-    created:'2026-09-01', plant:'3110 · Regent AU', originalEta:r[12], confirmed:r[13]!=='待确认', pending:null,
+    created:created[i], unitPrice:prices[i], currency:'AUD', plant:'3110 · Regent AU', originalEta:r[12], confirmed:r[13]!=='待确认', pending:null,
     batches:r[12] ? (i===3 ? [{qty:120,date:'2026-09-18'},{qty:120,date:'2026-09-22'}] : [{qty:r[8],date:r[12]}]) : [],
     comments: i===2 ? [{who:'Longtree · 陈经理',time:'09/07 15:30',text:'表面处理工序排期延后，预计 10 月 2 日到仓，请采购确认能否接受。'}] : [],
-    history:[{who:'SAP 同步',time:'09/01 09:00',text:'订单行已同步至协作平台'},...(r[12]?[{who:r[5]+' / 供应商',time:'09/02 14:20',text:`已确认交付安排，预计到仓 ${r[12]}`}]:[])],
+    history:[{who:'SAP 同步',time:'09/01 09:00',text:'历史订单行已同步至协作平台'},...(r[12]?[{who:r[5]+' / 供应商',time:'09/02 14:20',text:`已确认交付安排，预计到仓 ${r[12]}`}]:[])],
   }))
 }
 export function seedIssues() {
@@ -47,7 +49,7 @@ export function seedIssues() {
 }
 export function seedShipments() {
   return [
-    {id:'SHP-260901',order:'450051812-00020',qty:120,mode:'海运',ref:'TLLU 4821906',carrier:'COSCO · SYDNEY',from:'宁波',to:'墨尔本仓',etd:'2026-09-02',eta:'2026-09-18',stage:2,location:'新加坡中转',updated:'09/08 08:40'},
-    {id:'SHP-260904',order:'450051823-00010',qty:300,mode:'空运',ref:'781-29481065',carrier:'China Eastern · MU737',from:'上海',to:'悉尼仓',etd:'2026-09-07',eta:'2026-09-14',stage:2,location:'国际运输中',updated:'09/08 09:05'},
+    {id:'SHP-260901',order:'450051812-00020',qty:120,receivedQty:0,freight:2800,originalEta:'2026-09-17',mode:'海运',ref:'TLLU 4821906',carrier:'COSCO · SYDNEY',from:'宁波',to:'墨尔本仓',etd:'2026-09-02',eta:'2026-09-18',stage:2,location:'新加坡中转',updated:'09/08 08:40'},
+    {id:'SHP-260904',order:'450051823-00010',qty:300,receivedQty:0,freight:3450,originalEta:'2026-09-14',mode:'空运',ref:'781-29481065',carrier:'China Eastern · MU737',from:'上海',to:'悉尼仓',etd:'2026-09-07',eta:'2026-09-14',stage:2,location:'国际运输中',updated:'09/08 09:05'},
   ]
 }

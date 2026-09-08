@@ -15,6 +15,10 @@ npm run build
 
 ## Review flows
 
+The first page is now the Overview dashboard; Orders is the second navigation item. The overview includes outstanding PO/line counts, in-transit and unshipped quantities and goods values, fulfillment flow, transport quantity/value toggle, production/after-sales categories, open-order age buckets, shipment ETAs, freight and supplier confirmation summaries. Supplier/category filters apply to overview metrics; chart drilldowns carry the exact selected order IDs into the order workbench and can be cleared there.
+
+All prices and freight charges are fictional AUD values. Goods value is quantity × unit purchase price, excluding freight and tax. In-transit quantity is SAP shipped minus received, allocated only once across linked batches; unlinked quantities remain in an explicit unmatched transport group. Warehouse receipt quantities remain independent of logistics milestones. The fixed demonstration date is 2026-09-08. Historical order creation dates demonstrate ageing rather than delay. Timeliness and on-time delivery rates are not fabricated from incomplete history.
+
 1. Switch to Longtree supplier. Open PO 450051727 / 00090. Confirm 120 units or split them across multiple dates.
 2. On a confirmed, unshipped order, propose a new delivery schedule with a reason.
 3. Switch to Regent buyer. Review and accept or return the pending proposal in the delivery view. The existing commitment stays effective until accepted.
@@ -36,4 +40,4 @@ This is an independent prototype and is not an official Frappe product.
 
 ## Validation
 
-Domain tests cover supplier demo scoping, split quantities, invalid inputs and quantity reconciliation. Production build validates component and stylesheet compilation. Browser visual/interaction QA was not performed unless separately requested. Optional WebMCP tools are feature-detected; no supported WebMCP execution context was available during creation, so their runtime contract is not claimed as verified.
+Domain and analytics tests cover supplier/category scoping, split quantities, invalid inputs, partial receipts, unmatched batches, ageing boundaries and quantity/value reconciliation. Production build validates component and stylesheet compilation. Browser visual/interaction QA was not performed unless separately requested. Optional WebMCP tools are feature-detected; no supported WebMCP execution context was available during creation, so their runtime contract is not claimed as verified.
