@@ -1,5 +1,24 @@
 // Interface labels use their existing Chinese text as stable translation keys.
 export const messages = Object.fromEntries(`
+履约分析|Fulfillment analysis
+回顾历史表现，定位交付问题与改善方向。|Review historical performance and identify delivery improvements.
+历史履约分析|Historical fulfillment analysis
+当前演示仅包含订单快照，尚不足以计算历史绩效。接入完整记录后，将在这里按月、季度和供应商进行对比。|This demo contains order snapshots, which are not enough to calculate historical performance. Complete records will enable monthly, quarterly and supplier comparisons here.
+待接入历史数据|Historical data needed
+分析方向|Analysis area
+关注的问题|Questions to investigate
+所需历史记录|Required historical records
+供应商响应效率|Supplier response efficiency
+订单多久被确认，哪些供应商响应较慢|How long orders take to confirm and which suppliers respond slowly
+订单通知时间、首次响应与确认时间|Order notification, first response and confirmation timestamps
+承诺兑现与交期变化|Commitment reliability and date changes
+首次承诺是否兑现，交期为何反复调整|Whether first commitments were met and why dates changed repeatedly
+承诺版本、变更原因、实际到仓与收货记录|Commitment versions, change reasons, actual arrivals and receipts
+运输表现与延期原因|Transport performance and delay causes
+运输耗时与 ETA 偏差主要集中在哪些环节|Where transit time and ETA deviations are concentrated
+历史运输节点、ETA 版本及异常原因|Historical shipment milestones, ETA versions and exception reasons
+当前订单、在途数量和货值请查看总览；数据核对由数据中心负责。|See Overview for current orders, in-transit quantities and values. Reconciliation belongs in Data center.
+待核对的数据问题|Data issues to reconcile
 采购与供应商协作|Procurement & suppliers
 主要导航|Main navigation
 SAP + 协作平台|SAP + collaboration
