@@ -1,8 +1,9 @@
 <script setup>
+import { t as tr, dateLabel } from './i18n.mjs'
 import { computed, ref, watch } from 'vue'
 import { Button, Badge } from 'frappe-ui'
 import { ArrowUpRight, ArrowRight, Ship, Plane, PackageCheck, Factory, Wrench, Boxes, CalendarClock, CircleAlert } from 'lucide-vue-next'
-import { TODAY, fmt, dateLabel, openQty } from './domain.mjs'
+import { TODAY, fmt, openQty } from './domain.mjs'
 import { dashboardData, money, percent, transitQty, unshippedQty } from './analytics.mjs'
 
 const props=defineProps({orders:Array,shipments:Array,issues:Array,role:String})
@@ -27,79 +28,79 @@ watch(()=>props.role,()=>{supplier.value='全部供应商'})
 <template>
   <div class="overview">
     <div class="ov-toolbar">
-      <div class="ov-snapshot"><span class="ov-dot"></span> 当前订单快照 <span class="ov-date">{{TODAY}} · 演示业务日</span></div>
+      <div class="ov-snapshot"><span class="ov-dot"></span> {{tr("当前订单快照")}} <span class="ov-date">{{tr(TODAY)}} {{tr("· 演示业务日")}}</span></div>
       <div class="ov-filters">
-        <select v-if="role==='buyer'" v-model="supplier" aria-label="总览供应商筛选"><option>全部供应商</option><option v-for="s in [...new Set(orders.map(o=>o.supplier))]" :key="s">{{s}}</option></select>
-        <select v-model="category" aria-label="总览订单分类筛选"><option>全部分类</option><option>生产订单</option><option>售后配件</option></select>
-        <span>AUD · 件</span>
+        <select v-if="role==='buyer'" v-model="supplier" :aria-label="tr(&quot;总览供应商筛选&quot;)"><option :value="&quot;全部供应商&quot;">{{tr("全部供应商")}}</option><option :value="s" v-for="s in [...new Set(orders.map(o=>o.supplier))]" :key="s">{{tr(s)}}</option></select>
+        <select v-model="category" :aria-label="tr(&quot;总览订单分类筛选&quot;)"><option :value="&quot;全部分类&quot;">{{tr("全部分类")}}</option><option :value="&quot;生产订单&quot;">{{tr("生产订单")}}</option><option :value="&quot;售后配件&quot;">{{tr("售后配件")}}</option></select>
+        <span>{{tr("AUD · 件")}}</span>
       </div>
     </div>
 
     <div class="ov-kpis">
-      <button class="ov-kpi" @click="inspectRows(data.open,'未完成订单')"><div class="ov-kpi-label">未完成订单 <Boxes :size="19"/></div><strong>{{data.poCount}}<span>张 PO</span></strong><p>{{data.open.length}} 行订单 · {{fmt(data.openQty)}} 件未交</p><footer><span>未交货值 <b>{{money(data.openValue)}}</b></span><ArrowUpRight :size="17"/></footer></button>
-      <button class="ov-kpi ov-kpi-featured" @click="inspectRows(rows.filter(o=>transitQty(o)>0),'在途订单')"><div class="ov-kpi-label">在途数量 <Ship :size="20"/></div><strong>{{fmt(data.transitQty)}}<span>件</span></strong><p>{{data.batches.length}} 个关联批次 · 已发货，待收货</p><footer><span>在途货值 <b>{{money(data.transitValue)}}</b></span><ArrowUpRight :size="17"/></footer></button>
-      <button class="ov-kpi" @click="inspectRows(rows.filter(o=>unshippedQty(o)>0),'尚未发运订单')"><div class="ov-kpi-label">尚未发运 <Factory :size="19"/></div><strong>{{fmt(data.unshippedQty)}}<span>件</span></strong><p>包含待确认、生产中与待发运</p><footer><span>未发货值 <b>{{money(data.openValue-data.transitValue)}}</b></span><ArrowUpRight :size="17"/></footer></button>
-      <button class="ov-kpi ov-kpi-risk" @click="inspectRows(data.risk,'交期风险订单')"><div class="ov-kpi-label">交期风险 <CalendarClock :size="19"/></div><strong>{{data.risk.length}}<span>行</span></strong><p>当前承诺到仓晚于需求日期</p><footer><span>另有 <b>{{data.unconfirmed.length}} 行</b> 尚待确认</span><ArrowUpRight :size="17"/></footer></button>
+      <button class="ov-kpi" @click="inspectRows(data.open,'未完成订单')"><div class="ov-kpi-label">{{tr("未完成订单")}} <Boxes :size="19"/></div><strong>{{tr(data.poCount)}}<span>{{tr("张 PO")}}</span></strong><p>{{tr(data.open.length)}} {{tr("行订单 ·")}} {{tr(fmt(data.openQty))}} {{tr("件未交")}}</p><footer><span>{{tr("未交货值")}} <b>{{tr(money(data.openValue))}}</b></span><ArrowUpRight :size="17"/></footer></button>
+      <button class="ov-kpi ov-kpi-featured" @click="inspectRows(rows.filter(o=>transitQty(o)>0),'在途订单')"><div class="ov-kpi-label">{{tr("在途数量")}} <Ship :size="20"/></div><strong>{{tr(fmt(data.transitQty))}}<span>{{tr("件")}}</span></strong><p>{{tr(data.batches.length)}} {{tr("个关联批次 · 已发货，待收货")}}</p><footer><span>{{tr("在途货值")}} <b>{{tr(money(data.transitValue))}}</b></span><ArrowUpRight :size="17"/></footer></button>
+      <button class="ov-kpi" @click="inspectRows(rows.filter(o=>unshippedQty(o)>0),'尚未发运订单')"><div class="ov-kpi-label">{{tr("尚未发运")}} <Factory :size="19"/></div><strong>{{tr(fmt(data.unshippedQty))}}<span>{{tr("件")}}</span></strong><p>{{tr("包含待确认、生产中与待发运")}}</p><footer><span>{{tr("未发货值")}} <b>{{tr(money(data.openValue-data.transitValue))}}</b></span><ArrowUpRight :size="17"/></footer></button>
+      <button class="ov-kpi ov-kpi-risk" @click="inspectRows(data.risk,'交期风险订单')"><div class="ov-kpi-label">{{tr("交期风险")}} <CalendarClock :size="19"/></div><strong>{{tr(data.risk.length)}}<span>{{tr("行")}}</span></strong><p>{{tr("当前承诺到仓晚于需求日期")}}</p><footer><span>{{tr("另有")}} <b>{{tr(data.unconfirmed.length)}} {{tr("行")}}</b> {{tr("尚待确认")}}</span><ArrowUpRight :size="17"/></footer></button>
     </div>
 
     <div class="ov-grid ov-top-grid">
       <section class="ov-panel ov-flow-panel">
-        <div class="ov-panel-title"><div><h2>供应链履约总览</h2><p>中国供应端 → 澳大利亚收货端</p></div><span class="ov-tag">{{fmt(data.totalQty)}} 件订购总量</span></div>
+        <div class="ov-panel-title"><div><h2>{{tr("供应链履约总览")}}</h2><p>{{tr("中国供应端 → 澳大利亚收货端")}}</p></div><span class="ov-tag">{{tr(fmt(data.totalQty))}} {{tr("件订购总量")}}</span></div>
         <div class="ov-flow">
-          <button @click="inspectRows(rows.filter(o=>unshippedQty(o)>0),'尚未发运订单')"><span class="ov-node"><Factory :size="25"/></span><b>供应商</b><small>尚未发运</small><strong>{{fmt(data.unshippedQty)}} <em>件</em></strong></button>
-          <div class="ov-flow-connection"><span>发货</span><div></div><ArrowRight :size="18"/></div>
-          <button class="ov-flow-transit" @click="inspectRows(rows.filter(o=>transitQty(o)>0),'在途订单')"><span class="ov-node"><Ship :size="25"/></span><b>国际运输</b><small>已发未收</small><strong>{{fmt(data.transitQty)}} <em>件</em></strong></button>
-          <div class="ov-flow-connection"><span>到仓收货</span><div></div><ArrowRight :size="18"/></div>
-          <button @click="inspectRows(rows.filter(o=>o.received>0),'有收货记录的订单')"><span class="ov-node"><PackageCheck :size="25"/></span><b>Regent 仓库</b><small>SAP 已收货</small><strong>{{fmt(data.receivedQty)}} <em>件</em></strong></button>
+          <button @click="inspectRows(rows.filter(o=>unshippedQty(o)>0),'尚未发运订单')"><span class="ov-node"><Factory :size="25"/></span><b>{{tr("供应商")}}</b><small>{{tr("尚未发运")}}</small><strong>{{tr(fmt(data.unshippedQty))}} <em>{{tr("件")}}</em></strong></button>
+          <div class="ov-flow-connection"><span>{{tr("发货")}}</span><div></div><ArrowRight :size="18"/></div>
+          <button class="ov-flow-transit" @click="inspectRows(rows.filter(o=>transitQty(o)>0),'在途订单')"><span class="ov-node"><Ship :size="25"/></span><b>{{tr("国际运输")}}</b><small>{{tr("已发未收")}}</small><strong>{{tr(fmt(data.transitQty))}} <em>{{tr("件")}}</em></strong></button>
+          <div class="ov-flow-connection"><span>{{tr("到仓收货")}}</span><div></div><ArrowRight :size="18"/></div>
+          <button @click="inspectRows(rows.filter(o=>o.received>0),'有收货记录的订单')"><span class="ov-node"><PackageCheck :size="25"/></span><b>{{tr("Regent 仓库")}}</b><small>{{tr("SAP 已收货")}}</small><strong>{{tr(fmt(data.receivedQty))}} <em>{{tr("件")}}</em></strong></button>
         </div>
-        <div class="ov-stack" role="img" :aria-label="`数量构成：未发 ${data.unshippedQty} 件，在途 ${data.transitQty} 件，已收 ${data.receivedQty} 件`"><i :style="{width:percent(data.unshippedQty,data.totalQty)+'%'}"></i><i :style="{width:percent(data.transitQty,data.totalQty)+'%'}"></i><i :style="{width:percent(data.receivedQty,data.totalQty)+'%'}"></i></div>
-        <div class="ov-flow-legend"><span><i></i>未发 {{percent(data.unshippedQty,data.totalQty)}}%</span><span><i></i>在途 {{percent(data.transitQty,data.totalQty)}}%</span><span><i></i>已收 {{percent(data.receivedQty,data.totalQty)}}%</span></div>
-        <div class="ov-flow-bottom"><CalendarClock :size="18"/><span>未来 7 天预计到仓 <b>{{dueBatches.length}} 批 / {{fmt(dueBatches.reduce((n,s)=>n+s.outstanding,0))}} 件</b></span><button @click="emit('navigate','shipments')">跟踪物流 <ArrowRight :size="15"/></button></div>
+        <div class="ov-stack" role="img" :aria-label="tr(`数量构成：未发 ${data.unshippedQty} 件，在途 ${data.transitQty} 件，已收 ${data.receivedQty} 件`)"><i :style="{width:percent(data.unshippedQty,data.totalQty)+'%'}"></i><i :style="{width:percent(data.transitQty,data.totalQty)+'%'}"></i><i :style="{width:percent(data.receivedQty,data.totalQty)+'%'}"></i></div>
+        <div class="ov-flow-legend"><span><i></i>{{tr("未发")}} {{tr(percent(data.unshippedQty,data.totalQty))}}%</span><span><i></i>{{tr("在途")}} {{tr(percent(data.transitQty,data.totalQty))}}%</span><span><i></i>{{tr("已收")}} {{tr(percent(data.receivedQty,data.totalQty))}}%</span></div>
+        <div class="ov-flow-bottom"><CalendarClock :size="18"/><span>{{tr("未来 7 天预计到仓")}} <b>{{tr(dueBatches.length)}} {{tr("批 /")}} {{tr(fmt(dueBatches.reduce((n,s)=>n+s.outstanding,0)))}} {{tr("件")}}</b></span><button @click="emit('navigate','shipments')">{{tr("跟踪物流")}} <ArrowRight :size="15"/></button></div>
       </section>
 
       <section class="ov-panel">
-        <div class="ov-panel-title"><div><h2>在途运输分布</h2><p>仅统计已发未收货物</p></div><div class="ov-segment" aria-label="运输图表统计方式"><button :aria-pressed="chartMeasure==='qty'" :class="{active:chartMeasure==='qty'}" @click="chartMeasure='qty'">数量</button><button :aria-pressed="chartMeasure==='value'" :class="{active:chartMeasure==='value'}" @click="chartMeasure='value'">货值</button></div></div>
+        <div class="ov-panel-title"><div><h2>{{tr("在途运输分布")}}</h2><p>{{tr("仅统计已发未收货物")}}</p></div><div class="ov-segment" :aria-label="tr(&quot;运输图表统计方式&quot;)"><button :aria-pressed="chartMeasure==='qty'" :class="{active:chartMeasure==='qty'}" @click="chartMeasure='qty'">{{tr("数量")}}</button><button :aria-pressed="chartMeasure==='value'" :class="{active:chartMeasure==='value'}" @click="chartMeasure='value'">{{tr("货值")}}</button></div></div>
         <div class="ov-transport-body">
-          <div class="ov-donut" :style="donut" role="img" :aria-label="data.transport.map(t=>`${t.mode} ${percent(t[chartMeasure],transportTotal)}%`).join('，')"><div><small>{{chartMeasure==='qty'?'在途 / 件':'在途货值 / AUD'}}</small><strong>{{chartMeasure==='qty'?fmt(data.transitQty):money(data.transitValue)}}</strong></div></div>
-          <div class="ov-transport-legend"><button v-for="(t,i) in data.transport" :key="t.mode" @click="inspect(t.ids,t.mode+'在途订单')"><span><i :style="{background:colors[i]}"></i>{{t.mode}} <b>{{percent(t[chartMeasure],transportTotal)}}%</b></span><strong>{{fmt(t.qty)}} 件 <small>{{money(t.value)}}</small></strong><small>{{t.count}} 个关联运输批次 <ArrowUpRight :size="13"/></small></button></div>
+          <div class="ov-donut" :style="donut" role="img" :aria-label="tr(data.transport.map(t=>`${t.mode} ${percent(t[chartMeasure],transportTotal)}%`).join('，'))"><div><small>{{tr(chartMeasure==='qty'?'在途 / 件':'在途货值 / AUD')}}</small><strong>{{tr(chartMeasure==='qty'?fmt(data.transitQty):money(data.transitValue))}}</strong></div></div>
+          <div class="ov-transport-legend"><button v-for="(t,i) in data.transport" :key="t.mode" @click="inspect(t.ids,t.mode+'在途订单')"><span><i :style="{background:colors[i]}"></i>{{tr(t.mode)}} <b>{{tr(percent(t[chartMeasure],transportTotal))}}%</b></span><strong>{{tr(fmt(t.qty))}} {{tr("件")}} <small>{{tr(money(t.value))}}</small></strong><small>{{tr(t.count)}} {{tr("个关联运输批次")}} <ArrowUpRight :size="13"/></small></button></div>
         </div>
-        <div class="ov-freight"><span>在途批次运费 <b>{{money(data.freight)}}</b></span><small>示例费用 · 与货值分开统计</small></div>
+        <div class="ov-freight"><span>{{tr("在途批次运费")}} <b>{{tr(money(data.freight))}}</b></span><small>{{tr("示例费用 · 与货值分开统计")}}</small></div>
       </section>
     </div>
 
     <div class="ov-grid ov-middle-grid">
       <section class="ov-panel">
-        <div class="ov-panel-title"><div><h2>订单分类</h2><p>未完成订单 · 货值按未交数量计算</p></div><span class="ov-tag">{{data.open.length}} 行</span></div>
-        <button v-for="(c,i) in data.categories" :key="c.type" class="ov-category" @click="inspect(c.ids,c.type+' · 未完成')"><span class="ov-category-icon" :class="{parts:i===1}"><component :is="i===0?Factory:Wrench" :size="22"/></span><div class="ov-category-main"><div><b>{{c.type}}</b><span>{{c.count}} 行 · {{percent(c.count,data.open.length)}}%</span></div><div class="ov-category-bar"><i :style="{width:percent(c.count,data.open.length)+'%',background:i===0?'#196caa':'#14a89a'}"></i></div><p>未交 {{fmt(c.qty)}} 件 <span>其中在途 {{fmt(c.transit)}} 件</span></p></div><div class="ov-category-value"><strong>{{money(c.value)}}</strong><ArrowUpRight :size="15"/></div></button>
-        <div class="ov-caption">点击分类查看订单行、物料与交付安排。</div>
+        <div class="ov-panel-title"><div><h2>{{tr("订单分类")}}</h2><p>{{tr("未完成订单 · 货值按未交数量计算")}}</p></div><span class="ov-tag">{{tr(data.open.length)}} {{tr("行")}}</span></div>
+        <button v-for="(c,i) in data.categories" :key="c.type" class="ov-category" @click="inspect(c.ids,c.type+' · 未完成')"><span class="ov-category-icon" :class="{parts:i===1}"><component :is="i===0?Factory:Wrench" :size="22"/></span><div class="ov-category-main"><div><b>{{tr(c.type)}}</b><span>{{tr(c.count)}} {{tr("行 ·")}} {{tr(percent(c.count,data.open.length))}}%</span></div><div class="ov-category-bar"><i :style="{width:percent(c.count,data.open.length)+'%',background:i===0?'#196caa':'#14a89a'}"></i></div><p>{{tr("未交")}} {{tr(fmt(c.qty))}} {{tr("件")}} <span>{{tr("其中在途")}} {{tr(fmt(c.transit))}} {{tr("件")}}</span></p></div><div class="ov-category-value"><strong>{{tr(money(c.value))}}</strong><ArrowUpRight :size="15"/></div></button>
+        <div class="ov-caption">{{tr("点击分类查看订单行、物料与交付安排。")}}</div>
       </section>
 
       <section class="ov-panel ov-ageing">
-        <div class="ov-panel-title"><div><h2>未完成订单账龄</h2><p>从下单日至演示业务日 · 账龄不等于延期</p></div></div>
-        <div class="ov-table-scroll"><table><thead><tr><th>账龄</th><th>生产</th><th>售后</th><th>合计 / 行</th><th class="right">未交货值</th></tr></thead><tbody><tr v-for="a in data.ageing" :key="a.label"><td><button @click="inspect(a.ids,'账龄 '+a.label)">{{a.label}} <ArrowUpRight :size="12"/></button></td><td>{{a.production}}</td><td>{{a.parts}}</td><td><div class="ov-age-cell"><span :style="{width:percent(a.count,Math.max(...data.ageing.map(a=>a.count),1))+'%'}"></span><b>{{a.count}}</b></div></td><td class="right">{{money(a.value)}}</td></tr></tbody><tfoot><tr><td>合计</td><td>{{data.categories[0].count}}</td><td>{{data.categories[1].count}}</td><td>{{data.open.length}}</td><td class="right">{{money(data.openValue)}}</td></tr></tfoot></table></div>
+        <div class="ov-panel-title"><div><h2>{{tr("未完成订单账龄")}}</h2><p>{{tr("从下单日至演示业务日 · 账龄不等于延期")}}</p></div></div>
+        <div class="ov-table-scroll"><table><thead><tr><th>{{tr("账龄")}}</th><th>{{tr("生产")}}</th><th>{{tr("售后")}}</th><th>{{tr("合计 / 行")}}</th><th class="right">{{tr("未交货值")}}</th></tr></thead><tbody><tr v-for="a in data.ageing" :key="a.label"><td><button @click="inspect(a.ids,'账龄 '+a.label)">{{tr(a.label)}} <ArrowUpRight :size="12"/></button></td><td>{{tr(a.production)}}</td><td>{{tr(a.parts)}}</td><td><div class="ov-age-cell"><span :style="{width:percent(a.count,Math.max(...data.ageing.map(a=>a.count),1))+'%'}"></span><b>{{tr(a.count)}}</b></div></td><td class="right">{{tr(money(a.value))}}</td></tr></tbody><tfoot><tr><td>{{tr("合计")}}</td><td>{{tr(data.categories[0].count)}}</td><td>{{tr(data.categories[1].count)}}</td><td>{{tr(data.open.length)}}</td><td class="right">{{tr(money(data.openValue))}}</td></tr></tfoot></table></div>
       </section>
     </div>
 
     <section class="ov-panel ov-eta-panel">
-      <div class="ov-panel-title"><div><h2>在途到仓计划 <span class="ov-inline-count">{{data.batches.length}}</span></h2><p>按运输批次 ETA 排序 · 可展开查看关联订单</p></div><Button variant="outline" @click="emit('navigate','shipments')">全部物流 <ArrowRight :size="14"/></Button></div>
-      <div class="ov-table-scroll"><table><thead><tr><th>运输 / 运单</th><th>关联订单 / 物料</th><th>当前位置 → 目的地</th><th class="right">在途数量</th><th class="right">货值 / AUD</th><th class="right">运费 / AUD</th><th>预计到仓</th><th></th></tr></thead><tbody><tr v-for="s in data.batches" :key="s.id"><td><span class="ov-mode-label"><component :is="s.mode==='海运'?Ship:Plane" :size="17"/>{{s.mode}}</span><small>{{s.ref}}</small></td><td><button class="ov-po" @click="emit('open-order',s.orderRecord)">{{s.orderRecord.po}} / {{s.orderRecord.item}}</button><small>{{s.orderRecord.name}}</small></td><td>{{s.location}}<small>→ {{s.to}}</small></td><td class="right">{{fmt(s.outstanding)}} 件</td><td class="right">{{money(s.goodsValue)}}</td><td class="right">{{money(s.freight||0)}}</td><td><strong>{{dateLabel(s.eta)}}</strong><small :class="{'ov-warning':s.eta>s.originalEta}">{{s.eta>s.originalEta?'较首次 ETA 延后 '+Math.round((Date.parse(s.eta)-Date.parse(s.originalEta))/86400000)+' 天':'按首次 ETA'}}</small></td><td><button class="ov-open" :aria-label="'查看订单 '+s.orderRecord.po" @click="emit('open-order',s.orderRecord)"><ArrowUpRight :size="18"/></button></td></tr><tr v-if="!data.batches.length"><td colspan="8" class="ov-empty">当前筛选范围没有在途运输批次。</td></tr></tbody></table></div>
+      <div class="ov-panel-title"><div><h2>{{tr("在途到仓计划")}} <span class="ov-inline-count">{{tr(data.batches.length)}}</span></h2><p>{{tr("按运输批次 ETA 排序 · 可展开查看关联订单")}}</p></div><Button variant="outline" @click="emit('navigate','shipments')">{{tr("全部物流")}} <ArrowRight :size="14"/></Button></div>
+      <div class="ov-table-scroll"><table><thead><tr><th>{{tr("运输 / 运单")}}</th><th>{{tr("关联订单 / 物料")}}</th><th>{{tr("当前位置 → 目的地")}}</th><th class="right">{{tr("在途数量")}}</th><th class="right">{{tr("货值 / AUD")}}</th><th class="right">{{tr("运费 / AUD")}}</th><th>{{tr("预计到仓")}}</th><th></th></tr></thead><tbody><tr v-for="s in data.batches" :key="s.id"><td><span class="ov-mode-label"><component :is="s.mode==='海运'?Ship:Plane" :size="17"/>{{tr(s.mode)}}</span><small>{{tr(s.ref)}}</small></td><td><button class="ov-po" @click="emit('open-order',s.orderRecord)">{{tr(s.orderRecord.po)}} / {{tr(s.orderRecord.item)}}</button><small>{{tr(s.orderRecord.name)}}</small></td><td>{{s.locationUserEntered?s.location:tr(s.location)}}<small>→ {{tr(s.to)}}</small></td><td class="right">{{tr(fmt(s.outstanding))}} {{tr("件")}}</td><td class="right">{{tr(money(s.goodsValue))}}</td><td class="right">{{tr(money(s.freight||0))}}</td><td><strong>{{tr(dateLabel(s.eta))}}</strong><small :class="{'ov-warning':s.eta>s.originalEta}">{{tr(s.eta>s.originalEta?'较首次 ETA 延后 '+Math.round((Date.parse(s.eta)-Date.parse(s.originalEta))/86400000)+' 天':'按首次 ETA')}}</small></td><td><button class="ov-open" :aria-label="tr('查看订单 '+s.orderRecord.po)" @click="emit('open-order',s.orderRecord)"><ArrowUpRight :size="18"/></button></td></tr><tr v-if="!data.batches.length"><td colspan="8" class="ov-empty">{{tr("当前筛选范围没有在途运输批次。")}}</td></tr></tbody></table></div>
     </section>
 
     <div class="ov-grid ov-bottom-grid">
       <section class="ov-panel">
-        <div class="ov-panel-title"><div><h2>供应商协作概况</h2><p>当前未完成订单；确认包含部分数量承诺</p></div></div>
-        <div v-for="s in data.suppliers" :key="s.name" class="ov-supplier"><div><button @click="inspect(s.ids,s.name+' · 未完成')">{{s.name}} <ArrowUpRight :size="13"/></button><small>{{s.count}} 行 · 未交货值 {{money(s.value)}}</small></div><div class="ov-confirm"><span>已确认 {{s.confirmed}} / {{s.count}}</span><div><i :style="{width:percent(s.confirmed,s.count)+'%'}"></i></div></div><Badge :theme="s.risk?'orange':'green'">{{s.risk?s.risk+' 行交期风险':'无已知交期风险'}}</Badge></div>
-        <div class="ov-caption">确认及时率与准时交付率，待接入完整历史记录后计算。</div>
+        <div class="ov-panel-title"><div><h2>{{tr("供应商协作概况")}}</h2><p>{{tr("当前未完成订单；确认包含部分数量承诺")}}</p></div></div>
+        <div v-for="s in data.suppliers" :key="s.name" class="ov-supplier"><div><button @click="inspect(s.ids,s.name+' · 未完成')">{{tr(s.name)}} <ArrowUpRight :size="13"/></button><small>{{tr(s.count)}} {{tr("行 · 未交货值")}} {{tr(money(s.value))}}</small></div><div class="ov-confirm"><span>{{tr("已确认")}} {{tr(s.confirmed)}} / {{tr(s.count)}}</span><div><i :style="{width:percent(s.confirmed,s.count)+'%'}"></i></div></div><Badge :theme="s.risk?'orange':'green'">{{tr(s.risk?s.risk+' 行交期风险':'无已知交期风险')}}</Badge></div>
+        <div class="ov-caption">{{tr("确认及时率与准时交付率，待接入完整历史记录后计算。")}}</div>
       </section>
       <section class="ov-panel ov-action-panel">
-        <div class="ov-panel-title"><div><h2>需要关注</h2><p>从看板直接进入协作处理</p></div><CircleAlert :size="20"/></div>
-        <button @click="inspectRows(data.unconfirmed,'待供应商确认')"><span>待供应商确认</span><b>{{data.unconfirmed.length}} 行</b><ArrowRight :size="16"/></button>
-        <button @click="inspectRows(data.risk,'交期风险订单')"><span>承诺晚于需求</span><b>{{data.risk.length}} 行</b><ArrowRight :size="16"/></button>
-        <button @click="emit('navigate','exceptions')"><span>当前筛选未关闭异常</span><b>{{activeIssues.length}} 项</b><ArrowRight :size="16"/></button>
-        <small>异常入口展示当前角色的全部待办。</small>
+        <div class="ov-panel-title"><div><h2>{{tr("需要关注")}}</h2><p>{{tr("从看板直接进入协作处理")}}</p></div><CircleAlert :size="20"/></div>
+        <button @click="inspectRows(data.unconfirmed,'待供应商确认')"><span>{{tr("待供应商确认")}}</span><b>{{tr(data.unconfirmed.length)}} {{tr("行")}}</b><ArrowRight :size="16"/></button>
+        <button @click="inspectRows(data.risk,'交期风险订单')"><span>{{tr("承诺晚于需求")}}</span><b>{{tr(data.risk.length)}} {{tr("行")}}</b><ArrowRight :size="16"/></button>
+        <button @click="emit('navigate','exceptions')"><span>{{tr("当前筛选未关闭异常")}}</span><b>{{tr(activeIssues.length)}} {{tr("项")}}</b><ArrowRight :size="16"/></button>
+        <small>{{tr("异常入口展示当前角色的全部待办。")}}</small>
       </section>
     </div>
-    <p class="ov-footnote">模拟数据 · 所有金额为 AUD 示例采购货值，按数量 × 单价计算，不含运费及税费；全部物料暂统一为“件”。本页随当前角色、筛选和演示操作更新，未接入 SAP 或实际价格。</p>
+    <p class="ov-footnote">{{tr("模拟数据 · 所有金额为 AUD 示例采购货值，按数量 × 单价计算，不含运费及税费；全部物料暂统一为“件”。本页随当前角色、筛选和演示操作更新，未接入 SAP 或实际价格。")}}</p>
   </div>
 </template>
 
