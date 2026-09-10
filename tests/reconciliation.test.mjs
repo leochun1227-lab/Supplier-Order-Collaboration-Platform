@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { workspaceOrders,workspaceShipments,reconcile,detectChecks,resolveFact,updateCase,recordDispatch,applyDemoSnapshot,businessSummary,mappingReady,priceReady,reportedQty,groupedQuantity,remainingQty } from '../src/reconciliation.mjs'
+import { workspaceOrders,workspaceShipments,reconcile,detectChecks,resolveFact,updateCase,recordDispatch,applyDemoSnapshot,businessSummary,mappingReady,priceReady,reportedQty,groupedQuantity,remainingQty,updateShipment,delayDays,shipmentDelayed } from '../src/reconciliation.mjs'
 const fixture=()=>({orders:workspaceOrders(),shipments:workspaceShipments()})
 test('checks distinguish facts from timing and deduplicate repeat runs',()=>{
   const {orders,shipments}=fixture();let cases=reconcile(orders,shipments)
@@ -78,4 +78,38 @@ test('receipts, dispatch and commitments do not erase each other',()=>{
   assert.throws(()=>resolveFact(o,'delivery',{date:'2026-09-07'},'Past commitment'))
   assert.throws(()=>resolveFact(o,'shipment',{},'Notes cannot clear SAP gap'))
   assert.ok(detectChecks(orders,shipments).some(c=>c.order===o.id&&c.kind==='shipment'))
+})
+
+const logisticsForm=s=>({mode:s.mode,stage:s.stage,eta:s.eta||'',containerNo:s.containerNo||'',waybillNo:s.waybillNo||'',courierNo:s.courierNo||'',carrier:'Demo carrier',location:'Demo location',chassis:s.chassis,position:'Parts compartment',delayStatus:'normal',delayReason:'',nextAction:'Contact carrier',note:'Checked carrier update'})
+test('logistics edits preserve SAP facts, first ETA and distinct tracking fields with audit history',()=>{
+  const {orders,shipments}=fixture(),s=shipments[0],before=JSON.stringify(orders)
+  const sap=[s.sapPosted,s.sapDelivery,s.pgiAt,s.sapRef,JSON.stringify(s.allocations)]
+  updateShipment(s,{...logisticsForm(s),containerNo:'DEMO-NEW-BOX',waybillNo:'DEMO-BL',courierNo:'DEMO-PARCEL',eta:'2026-09-22',delayStatus:'delayed',delayReason:'Transshipment delay'})
+  assert.equal(s.originalEta,'2026-09-17');assert.equal(delayDays(s),5);assert.equal(s.containerNo,'DEMO-NEW-BOX');assert.equal(s.waybillNo,'DEMO-BL');assert.equal(s.courierNo,'DEMO-PARCEL')
+  assert.deepEqual([s.sapPosted,s.sapDelivery,s.pgiAt,s.sapRef,JSON.stringify(s.allocations)],sap)
+  assert.equal(JSON.stringify(orders),before);assert.equal(s.updates[0].before.eta,'2026-09-18');assert.equal(s.updates[0].after.eta,'2026-09-22')
+  updateShipment(s,{...logisticsForm(s),delayStatus:'normal',delayReason:'Still later than baseline'})
+  assert.ok(shipmentDelayed(s),'On-track selection does not erase actual ETA variance')
+  assert.equal(s.updates.length,2)
+})
+test('manual delay without ETA creates linked tasks, and later SAP sync preserves collaboration',()=>{
+  const {orders,shipments}=fixture(),s=shipments[2]
+  updateShipment(s,{...logisticsForm(s),eta:'',delayStatus:'delayed',delayReason:'Awaiting vessel confirmation',courierNo:'DEMO-LOCAL'})
+  assert.equal(delayDays(s),null)
+  const cases=detectChecks(orders,shipments).filter(c=>c.kind==='logistics'&&[orders[0].id,orders[1].id].includes(c.order));assert.equal(cases.length,2)
+  applyDemoSnapshot(orders,shipments);assert.equal(s.courierNo,'DEMO-LOCAL');assert.equal(s.delayReason,'Awaiting vessel confirmation');assert.equal(s.eta,'')
+  updateShipment(s,{...logisticsForm(s),eta:'2026-09-20',delayStatus:'normal'})
+  assert.equal(s.originalEta,'2026-09-20');assert.equal(delayDays(s),0)
+  assert.equal(detectChecks(orders,shipments).filter(c=>c.kind==='logistics'&&cases.some(old=>old.id===c.id)).length,0)
+})
+test('invalid logistics updates fail before touching the batch',()=>{
+  const s=workspaceShipments()[0],before=JSON.stringify(s)
+  for(const edit of [{eta:'2026-02-30'},{eta:'2026-09-24',delayReason:''},{delayStatus:'delayed',delayReason:''},{note:''},{stage:99}]){
+    assert.throws(()=>updateShipment(s,{...logisticsForm(s),...edit}));assert.equal(JSON.stringify(s),before)
+  }
+})
+test('new courier batches retain carrier and separate tracking references',()=>{
+  const {orders,shipments}=fixture()
+  const id=recordDispatch(orders,shipments,{date:'2026-09-08',mode:'快递',courierNo:'DEMO-COURIER-1',carrier:'Demo Express',containerNo:'',waybillNo:'DEMO-WAYBILL',eta:'',chassis:'',position:'',allocations:[{order:orders[0].id,qty:2}]})
+  const s=shipments.find(s=>s.id===id);assert.equal(s.ref,'DEMO-COURIER-1');assert.equal(s.carrier,'Demo Express');assert.equal(s.waybillNo,'DEMO-WAYBILL');assert.equal(s.sapPosted,false)
 })

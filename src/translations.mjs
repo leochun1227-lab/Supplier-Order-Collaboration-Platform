@@ -1,5 +1,6 @@
 // Interface labels use their existing Chinese text as stable translation keys.
 export const messages = Object.fromEntries(`
+快递|Courier
 运输与履约|Transport & fulfillment
 已收货值|Received value
 已确认 / 未完成行|Confirmed / open lines

@@ -23,13 +23,13 @@ function component(file, expose=''){
   let code=compileScript(descriptor,{id:file,inlineTemplate:true,genDefaultAs:'compiledComponent'}).content
   const imports={vue:Vue,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
     'frappe-ui':{Button:wrapper,Badge:wrapper,Dialog:dialog},'lucide-vue-next':new Proxy({},{get:()=>icon})}
-  for(const name of ['Operations.vue','RecordFacts.vue','ReviewDialog.vue','DispatchDialog.vue'])if(source.includes("'./"+name+"'"))imports['./'+name]={default:component(name)}
+  for(const name of ['Operations.vue','RecordFacts.vue','ReviewDialog.vue','DispatchDialog.vue','ShipmentEditor.vue'])if(source.includes("'./"+name+"'"))imports['./'+name]={default:component(name)}
   const edits=parseJS(code,{sourceType:'module'}).program.body.filter(n=>n.type==='ImportDeclaration').map(n=>({start:n.start,end:n.end,
     text:n.specifiers.map(s=>`const ${s.local.name}=imports[${JSON.stringify(n.source.value)}][${JSON.stringify(s.type==='ImportDefaultSpecifier'?'default':s.imported.name)}];`).join('\n')}))
   for(const edit of edits.reverse())code=code.slice(0,edit.start)+edit.text+code.slice(edit.end)
   return new Function('imports',code+';return compiledComponent')(imports)
 }
-const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue, orders, shipments, checks, reviewOpen, reviewCase, dispatchOpen, performReview, performDispatch, syncDemo, saveCollaborationDates'
+const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue, orders, shipments, checks, reviewOpen, reviewCase, dispatchOpen, performReview, performDispatch, syncDemo, saveCollaborationDates, startShipment, saveShipment'
 const App=component('App.vue',exposed)
 async function render(state={},run){
   let setupState
@@ -115,6 +115,21 @@ test('UI actions update shared facts, close matching cases and preserve reported
   })
   assertEnglish(r.text)
   assert.match(r.text,/Passed \/ resolved/)
+})
+
+test('logistics editor updates all linked orders and renders separate inputs in both languages',async()=>{
+  i18n.setLanguage('en')
+  const r=await render({page:'shipments'},s=>{
+    const batch=s.shipments.value[2];s.startShipment(batch)
+    s.saveShipment({mode:'海运',stage:0,eta:'2026-09-23',containerNo:'DEMO-BOX',waybillNo:'DEMO-BL',courierNo:'DEMO-EXP',carrier:'Demo Express',location:'Warehouse',chassis:'DEMO-VAN',position:'Parts',delayStatus:'delayed',delayReason:'Vessel rescheduled',nextAction:'Confirm sailing',note:'Carrier confirmed'})
+    assert.ok(s.orders.value.slice(0,2).every(o=>translations.translate(o.history[0].text,'en').includes(batch.id)))
+    assert.equal(s.orders.value[0].shipped,0)
+    assert.ok(s.checks.value.some(c=>c.kind==='logistics'&&c.order===s.orders.value[0].id))
+  })
+  assertEnglish(r.text);assert.match(r.text,/Courier tracking number/);assert.match(r.text,/Container number/);assert.match(r.text,/AU warehouse ETA/)
+  i18n.setLanguage('zh')
+  const chinese=await render({modal:'shipment',modalOpen:true,activeShipment:reconciliation.workspaceShipments()[0]})
+  assert.match(chinese.text,/快递追踪号/);assert.match(chinese.text,/延期原因/)
 })
 
 test('language preference restores safely and updates document language without a reload',async()=>{
