@@ -20,7 +20,7 @@ export function hydrateState(source,state={}){
     const original=originals.get(id),overlay=state.shipments?.[id]||{}
     const s={sapPosted:false,sapDelivery:'',pgiAt:'',receivedQty:0,...copy(original||{}),...pick(overlay,SHIPMENT_FIELDS),id}
     // Receipts belong to SAP even though allocations are editable platform data.
-    s.allocations=(s.allocations||[]).map(a=>({...a,receivedQty:original?.allocations?.find(x=>x.order===a.order)?.receivedQty||0}))
+    s.allocations=(s.allocations||[]).map(a=>({...a,receivedQty:original?.imported?original.allocations?.find(x=>x.order===a.order)?.receivedQty??null:original?.allocations?.find(x=>x.order===a.order)?.receivedQty||0}))
     return s
   })
   return {orders,shipments,issues:Object.values(state.issues||index(source.issues||[])),checks:Object.values(state.checks||{})}

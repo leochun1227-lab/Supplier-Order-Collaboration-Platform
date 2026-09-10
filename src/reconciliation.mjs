@@ -1,6 +1,7 @@
 import { TODAY, seedOrders, seedShipments, daysLate, openQty } from './domain.mjs'
 export const label=(zh,en)=>({zh,en})
 export const KINDS={
+  initialization:label('初始化记录待核对','Initialization review'),
   shipment:label('报发与 SAP 待核对','Reported shipment / SAP'),
   material:label('物料与单位待确认','Material / unit mapping'),
   reference:label('SO 关联待补充','Missing SO reference'),
@@ -41,14 +42,14 @@ export function updateShipment(s,input,at=TODAY){
   Object.assign(s,next,{updated:at,updates:[{at,note:input.note.trim(),before,after:Object.fromEntries([...fields,'stage'].map(k=>[k,next[k]]))},...(s.updates||[])]})
 }
 export const reportedQty=o=>o.reported??o.shipped
-export const remainingQty=o=>Math.max(0,o.qty-reportedQty(o))
+export const remainingQty=o=>o.imported?openQty(o):Math.max(0,o.qty-reportedQty(o))
 export const allocations=s=>s.allocations||[{order:s.order,qty:s.qty,receivedQty:s.receivedQty||0}]
 export const relatedShipments=(o,shipments)=>shipments.filter(s=>allocations(s).some(a=>a.order===o.id))
 export const priceSignature=o=>JSON.stringify([o.currency,o.unitPrice,o.priceUnit||1,o.unit||'EA'])
-export const priceReady=o=>o.priceConfirmed!==false&&(!o.priceConfirmation||o.priceConfirmation===priceSignature(o))&&o.currency==='AUD'&&Number.isFinite(o.unitPrice)&&o.unitPrice>=0&&(o.priceUnit||1)>0
+export const priceReady=o=>(!o.imported||o.quantityComparable)&&o.priceConfirmed!==false&&(!o.priceConfirmation||o.priceConfirmation===priceSignature(o))&&o.currency==='AUD'&&Number.isFinite(o.unitPrice)&&o.unitPrice>=0&&(o.priceUnit||1)>0
 export const mappingReady=o=>o.sapPart===o.soPart&&o.unit===o.soUnit||!!(o.mapping&&o.mapping.sapPart===o.sapPart&&o.mapping.soPart===o.soPart&&o.mapping.unit===o.unit&&o.mapping.soUnit===o.soUnit&&o.mapping.factor>0)
 export function groupedQuantity(orders,quantity){
-  const groups={};for(const o of orders){const n=quantity(o);if(n)groups[o.unit||'EA']=(groups[o.unit||'EA']||0)+n}return groups
+  const groups={};for(const o of orders){if(o.imported&&!o.quantityComparable)continue;const n=quantity(o);if(Number.isFinite(n)&&n)groups[o.unit||'EA']=(groups[o.unit||'EA']||0)+n}return groups
 }
 export const groupLabel=groups=>Object.entries(groups).map(([u,q])=>`${q.toLocaleString('en-AU')} ${u}`).join(' · ')||'—'
 export function factsFor(o,shipments){
@@ -56,8 +57,8 @@ export function factsFor(o,shipments){
   return [
     {field:label('物料编码','Material'),sap:o.sapPart||o.part,business:o.soPart||o.part,source:label('工厂 SO／平台','Factory SO / platform'),adopted:mappingReady(o)?label('对应关系已确认','Mapping confirmed'):label('双方原值保留','Both originals retained')},
     {field:label('计量单位','Unit'),sap:o.unit||'EA',business:o.soUnit||o.unit||'EA',source:label('工厂 SO','Factory SO'),adopted:o.mapping?`1 ${o.soUnit} = ${o.mapping.factor} ${o.unit}`:label('按原单位展示','Shown in original units')},
-    {field:label('发运数量','Dispatched quantity'),sap:`${o.shipped} ${o.unit||'EA'}`,business:`${reportedQty(o)} ${o.unit||'EA'}`,source:o.cooperationSource||label('平台','Platform'),adopted:label('分别保留报发与过账','Report and PGI kept separately')},
-    {field:label('PO 单价','PO unit price'),sap:`${o.currency} ${o.unitPrice} / ${o.priceUnit||1} ${o.unit||'EA'}`,business:'—',source:'SAP PO',adopted:priceReady(o)?label('纳入已确认货值','Included in confirmed value'):label('暂不计入货值','Excluded from confirmed value')},
+    {field:label('发运数量','Dispatched quantity'),sap:`${o.shipped??'—'} ${o.unit||'EA'}`,business:`${reportedQty(o)} ${o.unit||'EA'}`,source:o.cooperationSource||label('平台','Platform'),adopted:label('分别保留报发与过账','Report and PGI kept separately')},
+    {field:label('PO 单价','PO unit price'),sap:`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit||'EA'}`,business:'—',source:'SAP PO',adopted:priceReady(o)?label('纳入已确认货值','Included in confirmed value'):label('暂不计入货值','Excluded from confirmed value')},
     {field:label('SAP 交货单','SAP delivery'),sap:related.map(s=>s.sapDelivery||'—').join(' / ')||'—',business:related.map(s=>s.id).join(' / ')||'—',source:label('装运批次','Shipment batch'),adopted:label('按批次关联','Linked by batch')},
   ]
 }
@@ -65,6 +66,15 @@ export function detectChecks(orders,shipments,today=TODAY){
   const found=[]
   const add=(o,kind,evidence,priority='中')=>found.push({id:`CHECK-${o.id}-${kind}`,order:o.id,kind,category:'数据问题',title:KINDS[kind],detail:evidence,owner:o.buyer,priority,due:today,status:'待处理',note:'',fingerprint:JSON.stringify([kind,evidence]),rule:true})
   for(const o of orders){
+    if(o.imported){
+      if(openQty(o)<=0)continue
+      if(o.importChecks?.length)add(o,'initialization',o.importChecks.map(c=>`${c.title.zh} / ${c.title.en}`).join('; '))
+      if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit}`)
+      if(remainingQty(o)>0&&(!o.promisedEtd||o.promisedEtd<today||o.dispatchDelayStatus==='delayed'))add(o,'delivery',`${o.promisedEtd||'TBD'}; ${remainingQty(o)} ${o.unit}; ${o.dispatchDelayReason||''}`,'高')
+      const delayed=relatedShipments(o,shipments).filter(s=>shipmentDelayed(s,today))
+      if(delayed.length)add(o,'logistics',delayed.map(s=>`${s.id}: ETA ${s.eta||'TBD'}; ${s.delayReason||'—'}`).join(' / '),'高')
+      continue
+    }
     if(o.so&&!mappingReady(o))add(o,'material',`${o.sapPart} / ${o.unit} ↔ ${o.soPart} / ${o.soUnit}`)
     if(!o.so)add(o,'reference',`${o.po} / ${o.item}`)
     if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice} / ${o.priceUnit||1} ${o.unit}`)
@@ -113,7 +123,7 @@ export function recordDispatch(orders,shipments,input,today=TODAY){
   const ids=new Set();let supplier
   for(const a of input.allocations){const o=orders.find(o=>o.id===a.order);if(!o||ids.has(a.order)||!Number.isFinite(Number(a.qty))||Number(a.qty)<=0||Number(a.qty)>remainingQty(o)||!['M','FT2'].includes(o.unit)&&!Number.isInteger(Number(a.qty)))throw new Error('quantity_invalid');ids.add(a.order);if(supplier&&supplier!==o.supplier)throw new Error('supplier_mismatch');supplier=o.supplier}
   const rows=input.allocations.map(a=>({...a,qty:Number(a.qty),receivedQty:0}))
-  const id=`SHP-DEMO-${String(shipments.length+1).padStart(3,'0')}`
+  const id=orders.some(o=>o.imported)?`SHP-${today.replaceAll('-','')}-${crypto.randomUUID().slice(0,8)}`:`SHP-DEMO-${String(shipments.length+1).padStart(3,'0')}`
   for(const a of rows){const o=orders.find(o=>o.id===a.order);o.reported=reportedQty(o)+a.qty}
   shipments.push({id,order:rows[0].order,qty:rows.reduce((n,a)=>n+a.qty,0),receivedQty:0,allocations:rows,mode:input.mode,ref:reference.trim(),containerNo:input.containerNo||(!input.waybillNo&&!input.courierNo&&input.mode==='海运'?input.ref||'':''),waybillNo:input.waybillNo||'',courierNo:input.courierNo||'',carrier:input.carrier||'',delayStatus:'unknown',delayReason:'',nextAction:'',updates:[],chassis:input.chassis.trim(),position:input.position.trim(),reportedAt:input.date,etd:input.date,eta:input.eta||'',originalEta:input.eta||'',sapPosted:false,sapDelivery:'',pgiAt:'',stage:0,location:label('已报发，物流节点待核实','Reported; logistics unverified'),from:'宁波',to:'墨尔本仓',updated:today})
   return id

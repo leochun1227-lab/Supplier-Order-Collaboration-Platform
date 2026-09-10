@@ -25,6 +25,7 @@ function component(file, expose=''){
   let code=compileScript(descriptor,{id:file,inlineTemplate:true,genDefaultAs:'compiledComponent'}).content
   const imports={vue:Vue,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
     './persistence.mjs':persistence,'./firebase-store.mjs':{cloudConfigured:false,connectCloud:(...args)=>cloudFactory(...args)},
+    './runtime-config.mjs':{publicTestEnabled:false},'./public-firebase-store.mjs':{connectPublicWorkspace:async()=>{throw new Error('No public Firebase calls in SSR tests')}},
     'frappe-ui':{Button:wrapper,Badge:wrapper,Dialog:dialog},'lucide-vue-next':new Proxy({},{get:()=>icon})}
   for(const name of ['Operations.vue','RecordFacts.vue','ReviewDialog.vue','DispatchDialog.vue','ShipmentEditor.vue','CloudPanel.vue'])if(source.includes("'./"+name+"'"))imports['./'+name]={default:component(name)}
   const edits=parseJS(code,{sourceType:'module'}).program.body.filter(n=>n.type==='ImportDeclaration').map(n=>({start:n.start,end:n.end,
@@ -32,7 +33,7 @@ function component(file, expose=''){
   for(const edit of edits.reverse())code=code.slice(0,edit.start)+edit.text+code.slice(edit.end)
   return new Function('imports',code+';return compiledComponent')(imports)
 }
-const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue, orders, shipments, checks, reviewOpen, reviewCase, dispatchOpen, performReview, performDispatch, syncDemo, saveCollaborationDates, startShipment, saveShipment, loginCloud, cloudBusy, cloudError, cloudRevision, cloudConnected, removeShipment, restoreShipment'
+const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue, orders, shipments, issues, checks, reviewOpen, reviewCase, dispatchOpen, performReview, performDispatch, syncDemo, saveCollaborationDates, startShipment, saveShipment, loginCloud, cloudBusy, cloudError, cloudRevision, cloudConnected, removeShipment, restoreShipment'
 const App=component('App.vue',exposed)
 async function render(state={},run){
   let setupState
@@ -185,4 +186,13 @@ test('cloud deletion saves a tombstone and advances revision after acknowledgeme
   assert.equal(s.cloudRevision.value,1)
   assert.ok(saved.shipments[2].deletedAt);assert.equal(saved.orders[0].reported,0)
   assert.equal(s.cloudBusy.value,false)
+})
+
+test('imported orders paginate and keep unknown receipt facts out of completed status',async()=>{
+  i18n.setLanguage('en')
+  const orders=Array.from({length:85},(_,i)=>({...reconciliation.workspaceOrders()[0],id:`import-${i}`,po:`TEST-PO-${i}`,imported:true,sourceRemaining:1,sourceReported:0,reported:0,qty:1,received:null,shipped:null,type:'用途待确认',quantityComparable:false,importChecks:[]}))
+  const r=await render({page:'orders',orders,shipments:[],issues:[],checks:[]})
+  assert.equal((r.html.match(/TEST-PO-\d+/g)||[]).length,40)
+  assert.match(r.text,/85 records/);assert.match(r.text,/Purpose unconfirmed/)
+  assertEnglish(r.text)
 })

@@ -48,13 +48,15 @@ Fulfillment analysis retains its historical-data requirements instead of inventi
 
 Tailwind 3 is installed under the `tailwindcss3` alias to use Frappe UI's supported preset. The generated Sites scaffold dependencies and component library remain available; the active preview is the Vue application in `src/` and static output in `dist/`.
 
-## Firebase integration (not yet activated)
+## Firebase integration: public test activated
+
+The user explicitly confirmed public database read/write rules on 2026-09-10. `src/runtime-config.mjs` now enables the public test connector. The app loads 1,253 imported master records from Firebase, defaults to 99 initially open ledger records, and supports all-record and cancelled-record views with pagination. Other source tables attach evidence instead of duplicating orders. Platform edits persist as conditional, appended revisions; actual write/reload/clear/conflict tests passed in an isolated Firebase workspace that was then removed. SAP remains read-only and no scheduled SAP task is active. Public access has no authenticated actors or tamper-resistant guarantees. The private-pilot implementation below is retained as a future option, not the active connection path.
 
 The data-center panel now shows cloud-save status and, when a Web API key is configured, Firebase email/password sign-in for explicitly authorized internal pilot members. Every supported collaboration action uses an explicit save boundary, immutable revisions, server timestamps and a concurrent-edit check. Failed saves restore the previous local records. SAP-owned fields are excluded from collaboration restoration. Unposted dispatch records support deletion with a required reason and restoration from Data center; posted/received batches cannot be deleted.
 
 `scripts/sync-sap.ps1` and the related publisher stage complete, bounded, read-only SAP snapshots into a separate protected Firebase path. `register-sap-sync.ps1` prepares a Windows schedule only when explicitly executed with working local credential paths. No task has been registered and no real data has been uploaded. Real-data projection, supplier isolation, server-side business commands and production date handling remain pending; the cloud client only accepts initialized fictional pilot workspaces.
 
-See [Firebase setup and limitations](docs/firebase-integration.md). Default builds without `VITE_FIREBASE_API_KEY` remain session-only and say so visibly. The candidate database rules must be reviewed against existing project rules before deployment.
+See [Firebase setup and limitations](docs/firebase-integration.md). When public testing is disabled, builds without `VITE_FIREBASE_API_KEY` remain session-only and say so visibly. The candidate database rules must be reviewed against existing project rules before deployment.
 
 ## Attribution
 

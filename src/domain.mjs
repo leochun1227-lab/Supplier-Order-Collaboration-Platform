@@ -1,8 +1,9 @@
-export const TODAY = '2026-09-08'
+export let TODAY = '2026-09-08'
+export function useCurrentBusinessDate(){TODAY=new Intl.DateTimeFormat('en-CA',{timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}
 export const fmt = value => Number(value || 0).toLocaleString('en-AU')
 export const dateLabel = value => value ? value.slice(5).replace('-', '/') : '待确认'
 export const daysLate = order => order.eta ? Math.max(0, Math.round((Date.parse(order.eta) - Date.parse(order.required)) / 86400000)) : 0
-export const openQty = order => Math.max(0, order.qty - order.received)
+export const openQty = order => order.imported?(order.cancelled?0:Math.max(0,(order.sourceRemaining??Math.max(0,order.qty-(order.sourceReported||0)))-((order.reported??0)-(order.sourceReported||0)))):Math.max(0, order.qty - order.received)
 export const canSee = (order, role) => role === 'buyer' || order.supplier === 'Longtree'
 export function validateCommitment(order, batches) {
   if (!Array.isArray(batches) || !batches.length) throw new Error('请添加至少一个交付批次。')
