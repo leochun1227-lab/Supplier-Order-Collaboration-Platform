@@ -1,5 +1,6 @@
 // Adapter from retained source evidence to the existing collaboration UI.
 // Unknown receipts, AU ETA and PGI are never inferred from an Excel OK marker.
+import {classifyOrders} from './order-purpose.mjs'
 const number=v=>typeof v==='number'&&Number.isFinite(v)?v:null
 const text=v=>v==null||['/','—','-'].includes(String(v).trim())?'':String(v).trim()
 const date=v=>/^\d{4}-\d{2}-\d{2}/.test(text(v))?text(v).slice(0,10):''
@@ -35,5 +36,6 @@ export function excelWorkspace(batch){
         delayStatus:'unknown',delayReason:'',nextAction:'',updates:[],sapPosted:false,sapDelivery:'',pgiAt:'',from:'',to:'',updated:'2026-09-04'})
     }
   }
+  classifyOrders(orders)
   return {kind:'excel',schemaVersion:1,generation:batch.contentHash+'-ui-v2',updatedAt:Date.now(),importBatch:batch.batchId,summary:batch.summary,data:{orders,shipments,issues:[]}}
 }
