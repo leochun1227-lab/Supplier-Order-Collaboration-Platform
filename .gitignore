@@ -36,3 +36,9 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/firebase-debug.log
+/database-debug.log
+/firebase-debug.*.log
+/secrets/
+*.credential.xml
+*service-account*.json

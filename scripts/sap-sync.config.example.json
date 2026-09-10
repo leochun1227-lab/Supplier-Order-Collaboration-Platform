@@ -1,0 +1,12 @@
+{
+  "serverNode": "10.11.2.25:30241",
+  "client": "800",
+  "company": "3110",
+  "plant": "3111",
+  "supplier": "0000003060",
+  "salesOrg": "3090",
+  "customer": "0000003060",
+  "sapCredentialPath": "C:/secure/sap-credential.xml",
+  "serviceAccountPath": "C:/secure/firebase-service-account.json",
+  "nodePath": "C:/Program Files/nodejs/node.exe"
+}

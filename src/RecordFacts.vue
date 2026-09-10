@@ -8,7 +8,7 @@ const emit=defineEmits(['review','dispatch','shipment'])
 const l=(zh,en)=>tr(label(zh,en))
 const etd=ref(''),china=ref(''),reason=ref(''),delayStatus=ref('unknown'),delayReason=ref(''),plan=ref(''),error=ref('')
 watch(()=>props.order,o=>{etd.value=o?.promisedEtd||'';china.value=o?.chinaEta||'';reason.value='';delayStatus.value=o?.dispatchDelayStatus||'unknown';delayReason.value=o?.dispatchDelayReason||'';plan.value=o?.remainingPlan||'';error.value=''}, {immediate:true})
-function save(){try{props.saveDates(props.order,{etd:etd.value,china:china.value,reason:reason.value,delayStatus:delayStatus.value,delayReason:delayReason.value,plan:plan.value});reason.value='';error.value=''}catch(e){error.value=e.message}}
+async function save(){try{await props.saveDates(props.order,{etd:etd.value,china:china.value,reason:reason.value,delayStatus:delayStatus.value,delayReason:delayReason.value,plan:plan.value});reason.value='';error.value=''}catch(e){error.value=e.message}}
 </script>
 <template><div class="ops ops-record">
   <template v-if="tab==='overview'">

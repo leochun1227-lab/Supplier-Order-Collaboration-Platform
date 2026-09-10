@@ -1,0 +1,35 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "supplierCollaboration": {
+      "members": {
+        "$uid": { ".read": "auth != null && auth.uid === $uid" }
+      },
+      "workspaces": {
+        "$workspace": {
+          ".read": "auth != null && root.child('supplierCollaboration/members').child(auth.uid).child('role').val() === 'buyer' && root.child('supplierCollaboration/members').child(auth.uid).child('workspace').val() === $workspace",
+          "source": { ".write": false },
+          "versions": {
+            ".indexOn": ["revision"],
+            "$version": {
+              ".write": "auth != null && !data.exists() && newData.exists() && root.child('supplierCollaboration/members').child(auth.uid).child('role').val() === 'buyer' && root.child('supplierCollaboration/members').child(auth.uid).child('workspace').val() === $workspace",
+              ".validate": "newData.hasChildren(['revision','sourceGeneration','actor','at','action','stateJson','changes']) && $version === 'r' + newData.child('revision').val() && newData.child('sourceGeneration').val() === root.child('supplierCollaboration/workspaces').child($workspace).child('source/generation').val() && (newData.child('revision').val() === 1 || data.parent().child('r' + (newData.child('revision').val() - 1)).exists())",
+              "revision": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() % 1 === 0 && newData.val() <= 999999999999" },
+              "actor": { ".validate": "newData.val() === auth.uid" },
+              "at": { ".validate": "newData.isNumber() && newData.val() === now" },
+              "sourceGeneration": { ".validate": "newData.isString()" },
+              "action": { ".validate": "newData.isString() && newData.val().length <= 80" },
+              "stateJson": { ".validate": "newData.isString() && newData.val().length <= 1000000" },
+              "changes": { ".validate": "newData.hasChildren()" },
+              "$other": { ".validate": false }
+            }
+          },
+          "$other": { ".write": false }
+        }
+      },
+      "sap": { ".read": false, ".write": false },
+      "sync": { ".read": false, ".write": false }
+    }
+  }
+}

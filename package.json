@@ -25,6 +25,8 @@
     "cmdk": "1.1.1",
     "date-fns": "4.1.0",
     "embla-carousel-react": "8.5.2",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^14.3.0",
     "frappe-ui": "^0.1.278",
     "input-otp": "1.4.2",
     "lucide-react": "1.31.0",

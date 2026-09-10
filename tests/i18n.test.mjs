@@ -10,26 +10,29 @@ import * as analytics from '../src/analytics.mjs'
 import * as i18n from '../src/i18n.mjs'
 import * as translations from '../src/translations.mjs'
 import * as reconciliation from '../src/reconciliation.mjs'
+import * as persistence from '../src/persistence.mjs'
 
 // Render the real page templates in Node. Only the third-party UI wrappers are
 // replaced; this checks language coverage without browser or visual testing.
 const icon={render:()=>null}
 const wrapper={setup:(_,ctx)=>()=>Vue.h('div',ctx.slots.default?.())}
 const dialog={props:['modelValue','options'],setup:(p,ctx)=>()=>p.modelValue?Vue.h('section',[p.options.title,ctx.slots['body-content']?.(),ctx.slots.actions?.()]):null}
+let cloudFactory=async()=>{throw new Error('No Firebase network calls in SSR tests')}
 function component(file, expose=''){
   let source=fs.readFileSync(new URL('../src/'+file,import.meta.url),'utf8')
   if(expose)source=source.replace('</script>',`\ndefineExpose({${expose}})\n</script>`)
   const {descriptor}=parse(source)
   let code=compileScript(descriptor,{id:file,inlineTemplate:true,genDefaultAs:'compiledComponent'}).content
   const imports={vue:Vue,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
+    './persistence.mjs':persistence,'./firebase-store.mjs':{cloudConfigured:false,connectCloud:(...args)=>cloudFactory(...args)},
     'frappe-ui':{Button:wrapper,Badge:wrapper,Dialog:dialog},'lucide-vue-next':new Proxy({},{get:()=>icon})}
-  for(const name of ['Operations.vue','RecordFacts.vue','ReviewDialog.vue','DispatchDialog.vue','ShipmentEditor.vue'])if(source.includes("'./"+name+"'"))imports['./'+name]={default:component(name)}
+  for(const name of ['Operations.vue','RecordFacts.vue','ReviewDialog.vue','DispatchDialog.vue','ShipmentEditor.vue','CloudPanel.vue'])if(source.includes("'./"+name+"'"))imports['./'+name]={default:component(name)}
   const edits=parseJS(code,{sourceType:'module'}).program.body.filter(n=>n.type==='ImportDeclaration').map(n=>({start:n.start,end:n.end,
     text:n.specifiers.map(s=>`const ${s.local.name}=imports[${JSON.stringify(n.source.value)}][${JSON.stringify(s.type==='ImportDefaultSpecifier'?'default':s.imported.name)}];`).join('\n')}))
   for(const edit of edits.reverse())code=code.slice(0,edit.start)+edit.text+code.slice(edit.end)
   return new Function('imports',code+';return compiledComponent')(imports)
 }
-const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue, orders, shipments, checks, reviewOpen, reviewCase, dispatchOpen, performReview, performDispatch, syncDemo, saveCollaborationDates, startShipment, saveShipment'
+const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue, orders, shipments, checks, reviewOpen, reviewCase, dispatchOpen, performReview, performDispatch, syncDemo, saveCollaborationDates, startShipment, saveShipment, loginCloud, cloudBusy, cloudError, cloudRevision, cloudConnected, removeShipment, restoreShipment'
 const App=component('App.vue',exposed)
 async function render(state={},run){
   let setupState
@@ -150,4 +153,36 @@ test('language preference restores safely and updates document language without 
     assert.doesNotThrow(()=>session.setLanguage('en'))
     assert.equal(session.t('总览看板'),'Overview')
   }finally{delete globalThis.localStorage;delete globalThis.document}
+})
+
+
+test('cloud save failure restores business records and keeps the editor open',async()=>{
+  i18n.setLanguage('en')
+  let attempt
+  cloudFactory=async(email,password,receive)=>{
+    receive({state:{orders:reconciliation.workspaceOrders(),shipments:reconciliation.workspaceShipments(),issues:[],checks:[]},revision:4,generation:'seed-1',email})
+    return {save:async(state,action,expected,generation)=>{attempt={state,action,expected,generation};throw new Error('save_conflict')},disconnect:async()=>{}}
+  }
+  const {state:s}=await render();await s.loginCloud({email:'pilot@example.test',password:'test'})
+  assert.equal(s.cloudConnected.value,true)
+  const batch=s.shipments.value[2];s.startShipment(batch)
+  const before=persistence.copy(s.shipments.value)
+  await assert.rejects(s.saveShipment({mode:'海运',stage:0,eta:'2026-09-23',containerNo:'NEW-BOX',delayStatus:'delayed',delayReason:'Schedule changed',nextAction:'Check sailing',note:'Verified by carrier'}),/updated/)
+  assert.deepEqual(s.shipments.value,before);assert.equal(s.modalOpen.value,true)
+  assert.equal(s.cloudBusy.value,false);assert.equal(s.cloudRevision.value,4)
+  assert.equal(attempt.expected,4);assert.equal(attempt.generation,'seed-1');assert.equal(attempt.action,'saveShipment')
+  assert.match(s.cloudError.value,/not saved/)
+})
+
+test('cloud deletion saves a tombstone and advances revision after acknowledgement',async()=>{
+  i18n.setLanguage('en');let saved
+  cloudFactory=async(email,password,receive)=>{
+    receive({state:{orders:reconciliation.workspaceOrders(),shipments:reconciliation.workspaceShipments(),issues:[],checks:[]},revision:0,generation:'seed-2',email})
+    return {save:async state=>{saved=persistence.copy(state);return {revision:1,at:1}},disconnect:async()=>{}}
+  }
+  const {state:s}=await render();await s.loginCloud({email:'pilot@example.test',password:'test'})
+  await s.removeShipment(s.shipments.value[2],'Duplicate registration')
+  assert.equal(s.cloudRevision.value,1)
+  assert.ok(saved.shipments[2].deletedAt);assert.equal(saved.orders[0].reported,0)
+  assert.equal(s.cloudBusy.value,false)
 })

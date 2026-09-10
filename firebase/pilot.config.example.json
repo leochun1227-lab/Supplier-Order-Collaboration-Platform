@@ -1,0 +1,7 @@
+{
+  "projectId": "supplier-collaboration-30ddf",
+  "databaseURL": "https://supplier-collaboration-30ddf-default-rtdb.asia-southeast1.firebasedatabase.app",
+  "workspace": "internal-pilot",
+  "webEnvironmentVariable": "VITE_FIREBASE_API_KEY",
+  "note": "Use Firebase project Web app config. The web API key is not an Admin credential. Server credentials must never use VITE_ variables."
+}
