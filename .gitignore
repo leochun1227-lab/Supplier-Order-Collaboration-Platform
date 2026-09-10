@@ -42,3 +42,5 @@ next-env.d.ts
 /secrets/
 *.credential.xml
 *service-account*.json
+__pycache__/
+*.pyc
