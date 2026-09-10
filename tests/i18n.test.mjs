@@ -9,6 +9,7 @@ import * as domain from '../src/domain.mjs'
 import * as analytics from '../src/analytics.mjs'
 import * as i18n from '../src/i18n.mjs'
 import * as translations from '../src/translations.mjs'
+import * as reconciliation from '../src/reconciliation.mjs'
 
 // Render the real page templates in Node. Only the third-party UI wrappers are
 // replaced; this checks language coverage without browser or visual testing.
@@ -20,15 +21,15 @@ function component(file, expose=''){
   if(expose)source=source.replace('</script>',`\ndefineExpose({${expose}})\n</script>`)
   const {descriptor}=parse(source)
   let code=compileScript(descriptor,{id:file,inlineTemplate:true,genDefaultAs:'compiledComponent'}).content
-  const imports={vue:Vue,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,
+  const imports={vue:Vue,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
     'frappe-ui':{Button:wrapper,Badge:wrapper,Dialog:dialog},'lucide-vue-next':new Proxy({},{get:()=>icon})}
-  if(file==='App.vue')imports['./Overview.vue']={default:component('Overview.vue')}
+  for(const name of ['Operations.vue','RecordFacts.vue','ReviewDialog.vue','DispatchDialog.vue'])if(source.includes("'./"+name+"'"))imports['./'+name]={default:component(name)}
   const edits=parseJS(code,{sourceType:'module'}).program.body.filter(n=>n.type==='ImportDeclaration').map(n=>({start:n.start,end:n.end,
     text:n.specifiers.map(s=>`const ${s.local.name}=imports[${JSON.stringify(n.source.value)}][${JSON.stringify(s.type==='ImportDefaultSpecifier'?'default':s.imported.name)}];`).join('\n')}))
   for(const edit of edits.reverse())code=code.slice(0,edit.start)+edit.text+code.slice(edit.end)
   return new Function('imports',code+';return compiledComponent')(imports)
 }
-const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue'
+const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue, orders, shipments, checks, reviewOpen, reviewCase, dispatchOpen, performReview, performDispatch, syncDemo, saveCollaborationDates'
 const App=component('App.vue',exposed)
 async function render(state={},run){
   let setupState
@@ -87,6 +88,33 @@ test('dynamic dashboard labels and sample record descriptions have translations'
   assert.equal(translations.translate('请保留原文','en'),'请保留原文')
   i18n.setLanguage('en');assert.equal(i18n.dateLabel('2026-09-18'),'18 Sept')
   i18n.setLanguage('zh');assert.equal(i18n.dateLabel('2026-09-18'),'09/18')
+})
+
+test('source comparisons and rule-review dialogs render in English for all sample cases',async()=>{
+  i18n.setLanguage('en')
+  for(const selected of reconciliation.workspaceOrders()){
+    for(const detailTab of ['overview','commitment','logistics','activity'])assertEnglish((await render({selected,detailOpen:true,detailTab})).text)
+  }
+  for(const reviewCase of reconciliation.reconcile(reconciliation.workspaceOrders(),reconciliation.workspaceShipments())){
+    assertEnglish((await render({reviewOpen:true,reviewCase})).text)
+  }
+  assertEnglish((await render({dispatchOpen:true})).text)
+})
+
+test('UI actions update shared facts, close matching cases and preserve reported dispatch',async()=>{
+  i18n.setLanguage('en')
+  const r=await render({page:'data'},s=>{
+    const material=s.checks.value.find(c=>c.kind==='material')
+    s.performReview(material,{action:'confirm',owner:'Buyer',due:'2026-09-10',note:'Verified mapping',factor:1})
+    assert.equal(s.checks.value.find(c=>c.id===material.id).status,'已解决')
+    assert.equal(s.orders.value.at(-1).sapPart,'P135-01999')
+    s.syncDemo()
+    assert.equal(s.orders.value[0].reported,48)
+    assert.equal(s.orders.value[0].shipped,48)
+    assert.ok(s.checks.value.filter(c=>c.kind==='shipment').every(c=>c.status==='已解决'))
+  })
+  assertEnglish(r.text)
+  assert.match(r.text,/Passed \/ resolved/)
 })
 
 test('language preference restores safely and updates document language without a reload',async()=>{
