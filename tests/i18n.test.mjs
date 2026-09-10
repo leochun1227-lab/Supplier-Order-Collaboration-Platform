@@ -196,3 +196,48 @@ test('imported orders paginate and keep unknown receipt facts out of completed s
   assert.match(r.text,/85 records/);assert.match(r.text,/Purpose unconfirmed/)
   assertEnglish(r.text)
 })
+
+test('completed history is visible by default and global tabs escape drill-down and filters',async()=>{
+  i18n.setLanguage('en')
+  const base={...reconciliation.workspaceOrders()[0],imported:true,qty:1,received:null,shipped:null,type:'用途待确认',quantityComparable:false,importChecks:[]}
+  const orders=[
+    {...base,id:'closed',po:'HISTORY-OK',sourceRemaining:0,sourceReported:1,reported:1,importCompletion:'OK'},
+    {...base,id:'open',po:'CURRENT-NG',sourceRemaining:1,sourceReported:0,reported:0,importCompletion:'NG'},
+    {...base,id:'cancel',po:'CANCELLED-ROW',sourceRemaining:0,sourceReported:0,reported:0,cancelled:true},
+  ]
+  let state
+  const Ops=component('Operations.vue','status,rows,orderViews,pagedRows,selectStatus,query,owner,shipping,pageNumber,pageSize,goToPage')
+  const props=Vue.reactive({view:'orders',orders,shipments:[],issues:[],role:'buyer',selection:null})
+  // SSR does not schedule parent re-renders; mirror the parent prop update explicitly.
+  let liveProps
+  const View={...Ops,setup(p,ctx){liveProps=Vue.reactive({...p});return Ops.setup(liveProps,{...ctx,expose:s=>{state=s}})}}
+  const app=()=>Vue.createSSRApp({render:()=>Vue.h(View,{...props,onClearSelection:()=>{props.selection=null;liveProps.selection=null}})})
+  let html=await renderToString(app())
+  assert.match(html,/HISTORY-OK/);assert.match(html,/CURRENT-NG/);assert.match(html,/CANCELLED-ROW/)
+  assert.match(html,/Ledger completed/);assert.match(html,/not confirmed SAP receipt/)
+  assert.deepEqual(state.orderViews.value.slice(0,4).map(v=>v.records.length),[3,1,1,1])
+  props.selection={ids:['open'],label:'Open orders'}
+  html=await renderToString(app())
+  assert.doesNotMatch(html,/HISTORY-OK/);assert.equal(state.status.value,'all')
+  state.owner.value='Non-matching owner';state.query.value='Not found';state.shipping.value='空运'
+  state.selectStatus('completed')
+  assert.equal(props.selection,null);assert.equal(state.owner.value,'');assert.equal(state.query.value,'');assert.equal(state.shipping.value,'')
+  assert.deepEqual(state.rows.value.map(o=>o.id),['closed'])
+  state.selectStatus('all');assert.equal(state.rows.value.length,3)
+  state.selectStatus('cancelled');assert.deepEqual(state.rows.value.map(o=>o.id),['cancel'])
+})
+
+test('history pagination reaches final records and respects the selected page size',async()=>{
+  i18n.setLanguage('en')
+  const base={...reconciliation.workspaceOrders()[0],imported:true,sourceRemaining:0,sourceReported:1,reported:1,qty:1,received:null,shipped:null}
+  const orders=Array.from({length:1253},(_,i)=>({...base,id:`history-${i}`}))
+  let state
+  const Ops=component('Operations.vue','pagedRows,pageSize,pageNumber,goToPage,maxPage')
+  const View={...Ops,setup(p,ctx){return Ops.setup(p,{...ctx,expose:s=>{state=s}})}}
+  await renderToString(Vue.createSSRApp(View,{view:'orders',orders,shipments:[],issues:[],role:'buyer'}))
+  assert.equal(state.maxPage.value,32)
+  state.goToPage(32);assert.equal(state.pagedRows.value.length,13);assert.equal(state.pagedRows.value.at(-1).id,'history-1252')
+  state.pageSize.value=100;state.goToPage(999)
+  assert.equal(state.pageNumber.value,13);assert.equal(state.pagedRows.value.length,53);assert.equal(state.pagedRows.value.at(-1).id,'history-1252')
+  state.goToPage(-5);assert.equal(state.pageNumber.value,1);assert.equal(state.pagedRows.value.length,100)
+})
