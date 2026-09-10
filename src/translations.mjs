@@ -1,5 +1,14 @@
 // Interface labels use their existing Chinese text as stable translation keys.
 export const messages = Object.fromEntries(`
+运输与履约|Transport & fulfillment
+已收货值|Received value
+已确认 / 未完成行|Confirmed / open lines
+运输 / 订单|Transport / order
+货值 / 运费|Goods value / freight
+运费|Freight
+统计口径|Metric definitions
+点击指标可查看订单明细|Select a metric to view order details
+按 ETA 排序，展示最近 3 批；完整记录见全部物流。|Next 3 batches by ETA. See All shipments for the full list.
 履约分析|Fulfillment analysis
 回顾历史表现，定位交付问题与改善方向。|Review historical performance and identify delivery improvements.
 历史履约分析|Historical fulfillment analysis

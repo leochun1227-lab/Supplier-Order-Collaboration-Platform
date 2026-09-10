@@ -106,7 +106,7 @@ onUnmounted(()=>toolLifecycle.abort())
 </script>
 
 <template>
-  <div class="workspace">
+  <div class="workspace" :class="{'overview-layout':page==='overview'}">
     <aside class="sidebar" :class="{mobileOpen:sidebar}">
       <a class="brand" href="#/" @click.prevent="navigate('overview')"><span class="brandmark"><Boxes :size="23"/></span><span>REGENT<small>SUPPLIER COLLABORATION</small></span></a>
       <div class="workspace-label">{{tr("采购与供应商协作")}} <span>AU / CN</span></div>
