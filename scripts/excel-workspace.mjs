@@ -1,6 +1,7 @@
 // Adapter from retained source evidence to the existing collaboration UI.
 // Unknown receipts, AU ETA and PGI are never inferred from an Excel OK marker.
 import {classifyOrders} from './order-purpose.mjs'
+import {sapReferenceFields} from '../src/sap-reference.mjs'
 const number=v=>typeof v==='number'&&Number.isFinite(v)?v:null
 const text=v=>v==null||['/','—','-'].includes(String(v).trim())?'':String(v).trim()
 const date=v=>/^\d{4}-\d{2}-\d{2}/.test(text(v))?text(v).slice(0,10):''
@@ -22,7 +23,7 @@ export function excelWorkspace(batch){
       required:'',eta:'',originalEta:'',confirmed:false,status:cancelled?'已取消':f.completion==='OK'?'已报发':reported>0?'部分发运':'待确认',
       mode:text(f.mode).includes('空运')?'空运':text(f.mode).includes('海运')?'海运':text(f.mode).includes('快递')?'快递':'—',
       created:date(f.ordered),unitPrice:p?.NETPR??null,priceUnit:p?.PEINH??1,currency:p?.WAERS||'—',priceConfirmed:false,plant:p?.WERKS||'—',
-      sapPart:p?.MATNR||'',soPart:text(f.material),so:record.soCandidates.join(' / '),soQty:null,soUnit:'?',mapping:null,
+      ...sapReferenceFields(record),sapPart:p?.MATNR||'',soPart:text(f.material),so:record.soCandidates.join(' / '),soQty:null,soUnit:'?',mapping:null,
       initialEtd:date(f.agreed_etd),promisedEtd:date(f.planned_etd)||date(f.agreed_etd),chinaEta:date(f.eta_china),dispatchDelayStatus:delayed?'delayed':'unknown',dispatchDelayReason:delayed?text(delayed.fields.notes):'',remainingPlan:'',
       sourceAsOf:'2026-09-04',sapAsOf:p?'2026-09-10':'',syncedAt:'',cooperationSource:{zh:'Excel 初始化／平台维护',en:'Excel initialization / platform'},
       batches:[],pending:null,comments:[],dispatchUpdates:[],history:[{who:'Excel',time:'2026-09-04',text:{zh:'已导入原始台账，关联与状态待核对。',en:'Source ledger imported; associations and status require review.'}}],

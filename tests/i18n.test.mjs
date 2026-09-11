@@ -12,6 +12,7 @@ import * as translations from '../src/translations.mjs'
 import * as reconciliation from '../src/reconciliation.mjs'
 import * as persistence from '../src/persistence.mjs'
 import * as partsWorkbook from '../src/parts-workbook.mjs'
+import * as sapReference from '../src/sap-reference.mjs'
 import * as partsWorkbookStore from '../src/parts-workbook-store.mjs'
 
 // Render the real page templates in Node. Only the third-party UI wrappers are
@@ -26,7 +27,7 @@ function component(file, expose=''){
   if(expose)source=source.replace('</script>',`\ndefineExpose({${expose}})\n</script>`)
   const {descriptor}=parse(source)
   let code=compileScript(descriptor,{id:file,inlineTemplate:true,genDefaultAs:'compiledComponent'}).content
-  const imports={vue:Vue,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
+  const imports={vue:Vue,'./sap-reference.mjs':sapReference,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
     './exception-export.mjs':{downloadExceptions:(...args)=>exceptionDownload(...args)},
     './parts-workbook-download.mjs':{createPartsExportWorker(){throw new Error('No downloads in SSR tests')}},
     './parts-workbook.mjs':partsWorkbook,'./parts-workbook-store.mjs':partsWorkbookStore,
@@ -164,6 +165,70 @@ test('exception export uses all filtered tasks rather than the current page and 
   }})}}
   const html=await renderToString(Vue.createSSRApp(View,{view:'exceptions',orders,issues,shipments:[],role:'buyer'}))
   assert.match(html,/Export exceptions to Excel/);assert.match(html,/role="alert"/)
+})
+
+test('SAP comparison view filters by either original PO and shows both PO lines in English',async()=>{
+  i18n.setLanguage('en')
+  const o={...reconciliation.workspaceOrders()[0],id:'compare',imported:true,cancelled:true,
+    sapPo:'SAP-ORIGINAL',sapItem:'00010',sapReferenceStatus:'matched',
+    po:'EXCEL-NEW',item:'00020',importFields:{po:'EXCEL-NEW',line:'00020'}}
+  const issues=reconciliation.reconcile([o],[])
+  const Ops=component('Operations.vue','query,kind,tasks')
+  const View={...Ops,setup(props,ctx){return Ops.setup(props,{...ctx,expose(s){
+    s.kind.value='po'
+    for(const query of ['SAP-ORIGINAL','EXCEL-NEW']) {
+      s.query.value=query;assert.equal(s.tasks.value.length,1)
+    }
+  }})}}
+  const html=await renderToString(Vue.createSSRApp(View,{view:'exceptions',orders:[o],issues,shipments:[],role:'buyer'}))
+  assert.match(html,/SAP-ORIGINAL/);assert.match(html,/Excel line: 00020 \/ SAP line: 00010/)
+  assert.match(html,/SAP \/ workbook PO mismatch/)
+  assertEnglish(html)
+})
+
+test('each exception displays simultaneous PO and material differences with six header filters',async()=>{
+  i18n.setLanguage('en')
+  const o={...reconciliation.workspaceOrders()[0],id:'both',imported:true,cancelled:true,
+    sapPo:'SAP-PO-OLD',sapItem:'00010',sapReferenceStatus:'matched',sapPart:'SAP-MATERIAL-OLD',soPart:'EXCEL-MATERIAL-NEW',
+    importFields:{po:'EXCEL-PO-NEW',line:'00010'}}
+  const issues=reconciliation.reconcile([o],[])
+  assert.ok(issues.some(c=>c.kind==='po'));assert.ok(issues.some(c=>c.kind==='material'))
+  const html=await renderToString(Vue.createSSRApp(component('Operations.vue'),{view:'exceptions',orders:[o],issues,shipments:[],role:'buyer'}))
+  assert.equal((html.match(/aria-haspopup="dialog"/g)||[]).length,6)
+  const comparisonRows=[...html.matchAll(/<tr><td><b>.*?<\/tr>/g)]
+  assert.equal(comparisonRows.length,2)
+  for(const row of comparisonRows){
+    for(const value of ['SAP-PO-OLD','EXCEL-PO-NEW','SAP-MATERIAL-OLD','EXCEL-MATERIAL-NEW'])assert.ok(row[0].includes(value))
+    assert.ok((row[0].match(/ops-difference/g)||[]).length>=4)
+  }
+  assertEnglish(html)
+})
+
+test('header dropdown search and checklists combine across columns and constrain exported results',async()=>{
+  i18n.setLanguage('en')
+  const orders=['a','b','c'].map(id=>({...reconciliation.workspaceOrders()[0],id,imported:true,
+    sapPo:'SAP-'+id,po:'EXCEL-'+id,sapPart:'PART-'+id,soPart:'MATERIAL-'+id}))
+  const issues=orders.map((o,i)=>({id:'case-'+o.id,order:o.id,kind:'po',title:'PO mismatch',detail:'Different PO',status:'待处理',owner:i===2?'Other':'Leo',due:'2026-10-01'}))
+  let downloaded;exceptionDownload=(...args)=>{downloaded=args}
+  const Ops=component('Operations.vue','caseFilterKey,caseFilterDraft,openCaseFilter,closeCaseFilter,keyCaseFilter,caseOptions,visibleCaseOptions,caseFilters,applyCaseFilter,clearCaseFilter,resetCaseFilters,selectCaseOptions,toggleCaseOption,tasks,pageNumber,exportExceptionView')
+  const View={...Ops,setup(props,ctx){return Ops.setup(props,{...ctx,expose(s){
+    s.openCaseFilter('owner');assert.ok(s.caseOptions.value.includes('Leo / 2026-10-01'))
+    s.selectCaseOptions(false);s.toggleCaseOption('Leo / 2026-10-01');s.applyCaseFilter()
+    assert.deepEqual(s.tasks.value.map(c=>c.id),['case-a','case-b'])
+    s.openCaseFilter('po');s.caseFilterDraft.value.query='SAP-b';s.pageNumber.value=2;s.applyCaseFilter()
+    assert.deepEqual(s.tasks.value.map(c=>c.id),['case-b']);assert.equal(s.pageNumber.value,1)
+    s.exportExceptionView();assert.deepEqual(downloaded[0].map(c=>c.id),['case-b'])
+    s.openCaseFilter('po');s.clearCaseFilter();assert.equal(s.tasks.value.length,2)
+    s.openCaseFilter('status');s.selectCaseOptions(false);s.applyCaseFilter();assert.equal(s.tasks.value.length,0)
+    s.resetCaseFilters();assert.equal(s.tasks.value.length,3)
+    s.openCaseFilter('material');s.caseFilterDraft.value.query='part-a'
+    assert.deepEqual(s.visibleCaseOptions.value,['SAP: PART-a'])
+    s.keyCaseFilter({key:'Escape',preventDefault(){}});assert.equal(s.caseFilterKey.value,'');assert.equal(s.tasks.value.length,3)
+    s.openCaseFilter('material');s.caseFilterDraft.value.query='MATERIAL-c';s.applyCaseFilter()
+    assert.deepEqual(s.tasks.value.map(c=>c.id),['case-c'])
+  }})}}
+  const html=await renderToString(Vue.createSSRApp(View,{view:'exceptions',orders,issues,shipments:[],role:'buyer'}))
+  assert.match(html,/Clear column filters/);assertEnglish(html)
 })
 
 test('remote column changes retain the selected cell identity and clear stale filters; deleting that cell clears selection',async()=>{

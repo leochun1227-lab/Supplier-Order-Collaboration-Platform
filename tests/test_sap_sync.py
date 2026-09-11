@@ -2,6 +2,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('sap_sync', Path(__file__).parents[1] / 'scripts/sync_sap.py')
@@ -98,12 +99,16 @@ class SyncTests(unittest.TestCase):
                 return rows
             def close(self): pass
         class Connection:
+            @property
+            def timeout(self): return 0
+            @timeout.setter
+            def timeout(self, _): raise RuntimeError('HYC00', 'Optional feature not implemented')
             def cursor(self): return Cursor()
             def rollback(self): self.rolled_back = True
             def close(self): self.closed = True
         conn = Connection()
         def connect(dsn, **kwargs):
-            self.assertEqual(kwargs, {'timeout': 20, 'readonly': True, 'autocommit': False})
+            self.assertEqual(kwargs, {'timeout': 20, 'autocommit': False})
             return conn
         with patch.object(sync, 'connection_string', return_value='test-only'):
             snapshot = sync.extract(config, connect)
@@ -113,6 +118,19 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(snapshot['counts']['po'], 1)
         with self.assertRaises(ValueError):
             sync.query_for('po', {**config, 'client': "800' OR 1=1"})
+
+    def test_hana_credentials_remain_literal_and_cannot_inject_options(self):
+        credential_path = Path(__file__).resolve()
+        config = {'sapCredentialPath': str(credential_path), 'serverNode': 'sap.test:30015'}
+        with patch.dict(sync.os.environ, {}, clear=True):
+            with patch.object(sync.subprocess, 'run', return_value=SimpleNamespace(
+                    returncode=0, stdout=b'{"user":"TEST_USER","password":"fake!password"}')):
+                self.assertEqual(sync.connection_string(config),
+                                 'DRIVER={HDBODBC};SERVERNODE=sap.test:30015;UID=TEST_USER;PWD=fake!password;')
+            with patch.object(sync.subprocess, 'run', return_value=SimpleNamespace(
+                    returncode=0, stdout=b'{"user":"TEST_USER","password":"bad;UID=OTHER"}')):
+                with self.assertRaisesRegex(ValueError, 'unsupported_hana_connection_value'):
+                    sync.connection_string(config)
 
     def test_transport_rejects_collaboration_paths_before_network(self):
         db = sync.Firebase({'firebasePublicTest': True})

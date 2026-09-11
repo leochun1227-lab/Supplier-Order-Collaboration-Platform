@@ -8,11 +8,11 @@
 
 1. 安装 **64 位 Python 3.11 或以上**，以及公司的 **64 位 SAP HANA Client（HDBODBC 驱动）**。
 2. 确认电脑能连接 SAP 内网 `10.11.2.25:30241`，并能通过 HTTPS 访问 Firebase。
-3. 双击 `setup-sap-sync.bat`。它会安装 Python 的 pyodbc 依赖，请输入 SAP 地址和只读账号密码。
+3. 双击 `setup-sap-sync.bat`。它会检查 Python 的 pyodbc 依赖，缺少时才安装。已保存的地址和加密凭据会自动复用，不再提示输入；只有首次缺少凭据时才要求填写一次。
 4. 在此目录打开终端，先执行 `run.bat -DryRun`：读取并验证 SAP，不写 Firebase。成功时输出 `status: dry_run` 和五类表的数量。
 5. 再执行 `run.bat`：读取 SAP，上传并回读验证；`published` 表示新快照成功，`unchanged` 表示本次数据与上次一致。失败退出码为 1，成功为 0。
 
-本地配置在 `secrets/sap-sync.config.json`，密码在 `secrets/sap.credential.xml`。密码由 Windows 保护，仅供创建它的 Windows 用户在同一电脑解密。换电脑必须重新运行配置入口。不要把这些文件放入 Render 或 GitHub。
+本地配置在 `secrets/sap-sync.config.json`，密码在 `secrets/sap.credential.xml`。密码由 Windows 保护，仅供创建它的 Windows 用户在同一电脑解密。换电脑必须重新运行配置入口。主动更换地址或账号时使用 `setup-sap-sync.bat -Reconfigure`；日常只运行 `run.bat`。不要把这些文件放入 Render 或 GitHub。
 
 日志：`outputs/firebase-sync/sync.log`。最近一次成功提取的本地快照：`outputs/firebase-sync/latest-extraction.json`。日志只记录阶段、结果和数量，不输出密码或原始数据库错误。此轮任何查询失败或 PO 为空，都不发布不完整快照。
 
@@ -40,7 +40,7 @@
 - `supplierCollaboration/sync/lastSuccessfulCheck`：最近成功检查时间，包括没有数据变化的检查。
 - `supplierCollaboration/sync/runs/{run}`：新快照发布结果。
 
-只有完整抓取并回读验证成功才切换最新快照；相同数据不重复创建快照；较早运行不能覆盖较新的结果。脚本仅允许 SELECT 查询，连接请求只读模式，不提交 SAP 修改。
+只有完整抓取并回读验证成功才切换最新快照；相同数据不重复创建快照；较早运行不能覆盖较新的结果。脚本仅允许经过校验的 SELECT 查询，使用只读 SAP 账号，不提交 SAP 修改，并在结束时回滚、关闭连接。HDBODBC 不支持的只读连接属性不再传入；可选超时属性仅在驱动支持时启用。
 
 **此同步脚本更新的是 SAP 原始数据区，不会自动重建现有 1,253 条网页台账，也不会自动将所有收货、在途和异常判定更新到订单。** 后续需要接入已经核实的 PO/SO、单位、冲销和分批映射。平台维护的 ETA、延期、报发、快递号、集装箱号及历史版本不会被本脚本覆盖。
 
@@ -73,6 +73,6 @@ Firebase 数据库地址已配置在网页代码中。此公开测试模式不�
 
 在同步电脑手工运行一次 `run.bat`，确认日志成功且 Firebase `sap/current` 和 `sync/lastSuccessfulCheck` 已更新。两边检查分别验证“网页保存”和“SAP 定时取数”，不能用其中一个成功代替另一个。
 
-说明：本次提供了脚本与本地程序测试，尚未在目标电脑、其 SAP 网络连接或你的 Render 地址实测。
+2026-09-11 已在当前 Windows 用户下验证加密凭据复用及 `run.bat -DryRun` 真实 SAP 抓取成功：PO 8,031、SO 7,868、交货 5,841、计划行 8,031、采购历史 10,161。本次测试不写 Firebase；其他电脑仍需各自配置 Windows 加密凭据。
 
 参考：[Render Static Sites](https://render.com/docs/static-sites)、[Node 版本配置](https://render.com/docs/node-version)、[Blueprint 配置](https://render.com/docs/blueprint-spec)。

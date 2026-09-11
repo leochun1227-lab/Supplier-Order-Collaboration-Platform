@@ -1,12 +1,13 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Button, Badge } from 'frappe-ui'
-import { ArrowUpRight, ArrowRight, Search, RefreshCw, Plus, Ship, Plane, CircleAlert, CheckCheck, Download } from 'lucide-vue-next'
+import { ArrowUpRight, ArrowRight, Search, RefreshCw, Plus, Ship, Plane, CircleAlert, CheckCheck, Download, Filter, X } from 'lucide-vue-next'
 import { t as tr, dateLabel, language } from './i18n.mjs'
+import { normalizedIdentity } from './sap-reference.mjs'
 import { downloadExceptions } from './exception-export.mjs'
 import { TODAY, openQty } from './domain.mjs'
 import { money, percent } from './analytics.mjs'
-import { KINDS, label, businessSummary, reportedQty, remainingQty, groupLabel, groupedQuantity, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
+import { KINDS, label, workbookIdentity, businessSummary, reportedQty, remainingQty, groupLabel, groupedQuantity, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
 const props=defineProps({view:String,orders:Array,shipments:Array,issues:Array,role:String,selection:Object,synced:Boolean})
 const emit=defineEmits(['open-order','review','dispatch','sync','inspect','navigate','reset','clear-selection','shipment'])
 const l=(zh,en)=>tr(label(zh,en))
@@ -27,7 +28,68 @@ const problemOrders=computed(()=>new Set(active.value.map(c=>c.order)))
 function matchesStatus(o,value){return value==='all'||value==='cancelled'&&o.cancelled||value==='open'&&openQty(o)>0||value==='completed'&&!o.cancelled&&o.qtyKnown!==false&&openQty(o)===0||value==='checks'&&problemOrders.value.has(o.id)}
 const orderViews=computed(()=>[['all','全部记录','All records'],['open','未完成','Open'],['completed',imported.value?'台账已完成':'已收货',imported.value?'Ledger completed':'Received'],['cancelled','已取消','Cancelled'],['checks','有待处理','Needs action']].map(([key,zh,en])=>({key,title:l(zh,en),records:props.orders.filter(o=>matchesStatus(o,key))})))
 const rows=computed(()=>scope.value.filter(o=>(!props.selection||props.selection.ids.includes(o.id))&&(!owner.value||o.buyer===owner.value)&&(!source.value||o.sourceType===source.value)&&(!shipping.value||o.mode===shipping.value)&&`${o.po} ${o.part} ${o.so||''} ${o.en} ${o.name}`.toLowerCase().includes(query.value.toLowerCase())&&matchesStatus(o,status.value)))
-const tasks=computed(()=>props.issues.filter(c=>(props.view!=='data'||c.rule)&&(!kind.value||c.kind===kind.value)&&(!owner.value||c.owner===owner.value)&&(caseStatus.value==='all'||caseStatus.value==='active'&&c.status!=='已解决'||caseStatus.value==='closed'&&c.status==='已解决')&&`${c.id} ${props.orders.find(o=>o.id===c.order)?.po} ${tr(c.title)}`.toLowerCase().includes(query.value.toLowerCase())))
+function taskSearch(c) {
+  const o=props.orders.find(o=>o.id===c.order)||{}, current=workbookIdentity(o)
+  return [c.id,tr(c.title),tr(c.detail),current.po,current.item,o.sapPo,o.sapItem,o.part,o.sapPart].join(' ').toLowerCase()
+}
+const baseTasks=computed(()=>props.issues.filter(c=>(props.view!=='data'||c.rule)&&(!kind.value||c.kind===kind.value)&&(!owner.value||c.owner===owner.value)&&(caseStatus.value==='all'||caseStatus.value==='active'&&c.status!=='已解决'||caseStatus.value==='closed'&&c.status==='已解决')&&taskSearch(c).includes(query.value.toLowerCase())))
+const caseFilters=ref({}), caseFilterKey=ref(''), caseFilterDraft=ref({query:'',values:null})
+const caseFilterPanel=ref(null),caseFilterInput=ref(null),caseFilterStyle=ref({})
+let caseFilterAnchor=null
+const caseColumns=computed(()=>[
+  ['issue',l('问题与比对摘要','Issue & comparison')],['po',l('PO / 行 · 双方原值','PO / line · both originals')],
+  ['material',l('料号 · 双方原值','Material · both originals')],['owner',l('责任人／期限','Owner / due')],
+  ['status',l('状态','Status')],['action',l('下一步','Next action')],
+])
+function caseValues(c,key) {
+  const o=order(c.order)||{},current=workbookIdentity(o)
+  if(key==='issue')return [tr(c.title)]
+  if(key==='po')return [`Excel: ${current.po||'—'} / ${current.item||'—'}`,`SAP: ${o.sapPo||'—'} / ${o.sapItem||'—'}`]
+  if(key==='material')return [`Excel: ${(o.soPart??o.part)||'—'}`,`SAP: ${o.sapPart||'—'}`]
+  if(key==='owner')return [`${c.owner||'—'} / ${c.due||'—'}`]
+  if(key==='status')return [tr(c.status)]
+  return [c.status==='已解决'?l('查看依据','View evidence'):l(props.role==='buyer'?'核对与处理':'查看与跟进',props.role==='buyer'?'Review & act':'View & follow up')]
+}
+function caseMatches(c,except='') {
+  return Object.entries(caseFilters.value).every(([key,f])=>key===except||caseValues(c,key).some(v=>(!f.query||v.toLowerCase().includes(f.query.toLowerCase()))&&(f.values===null||f.values.includes(v))))
+}
+const tasks=computed(()=>baseTasks.value.filter(c=>caseMatches(c)))
+const caseOptions=computed(()=>[...new Set(baseTasks.value.filter(c=>caseMatches(c,caseFilterKey.value)).flatMap(c=>caseValues(c,caseFilterKey.value)))].sort((a,b)=>a.localeCompare(b)))
+const visibleCaseOptions=computed(()=>caseOptions.value.filter(v=>v.toLowerCase().includes(caseFilterDraft.value.query.toLowerCase())))
+function caseOptionSelected(v){return caseFilterDraft.value.values===null||caseFilterDraft.value.values.includes(v)}
+function toggleCaseOption(v){const selected=new Set(caseFilterDraft.value.values??caseOptions.value);if(selected.has(v))selected.delete(v);else selected.add(v);caseFilterDraft.value.values=[...selected]}
+function selectCaseOptions(selected){caseFilterDraft.value.values=selected?[...visibleCaseOptions.value]:[]}
+function closeCaseFilter(restore=false){caseFilterKey.value='';if(restore)caseFilterAnchor?.focus();caseFilterAnchor=null}
+function openCaseFilter(key,event){
+  if(caseFilterKey.value===key){closeCaseFilter(true);return}
+  caseFilterAnchor=event?.currentTarget||null
+  caseFilterDraft.value=structuredClone(caseFilters.value[key]?{...caseFilters.value[key],values:caseFilters.value[key].values?[...caseFilters.value[key].values]:null}:{query:'',values:null})
+  caseFilterKey.value=key
+  if(caseFilterAnchor){
+    const r=caseFilterAnchor.getBoundingClientRect(),width=Math.min(310,window.innerWidth-16),height=Math.min(380,window.innerHeight-16)
+    const top=r.bottom+height+8<=window.innerHeight?r.bottom+4:Math.max(8,r.top-height-4)
+    caseFilterStyle.value={left:Math.max(8,Math.min(r.right-width,window.innerWidth-width-8))+'px',top:top+'px',width:width+'px',maxHeight:height+'px'}
+    nextTick(()=>caseFilterInput.value?.focus())
+  }
+}
+function applyCaseFilter(){
+  const f={query:caseFilterDraft.value.query.trim(),values:caseFilterDraft.value.values===null?null:[...caseFilterDraft.value.values]}
+  if(caseOptions.value.length&&f.values?.length===caseOptions.value.length&&caseOptions.value.every(v=>f.values.includes(v)))f.values=null
+  if(!f.query&&f.values===null)delete caseFilters.value[caseFilterKey.value];else caseFilters.value[caseFilterKey.value]=f
+  pageNumber.value=1;closeCaseFilter(true)
+}
+function clearCaseFilter(){delete caseFilters.value[caseFilterKey.value];pageNumber.value=1;closeCaseFilter(true)}
+function resetCaseFilters(){caseFilters.value={};pageNumber.value=1;closeCaseFilter()}
+function outsideCaseFilter(e){if(caseFilterKey.value&&!caseFilterPanel.value?.contains(e.target)&&!caseFilterAnchor?.contains(e.target))closeCaseFilter()}
+function keyCaseFilter(e){if(caseFilterKey.value&&e.key==='Escape'){e.preventDefault();closeCaseFilter(true)}}
+function moveCaseFilter(e){if(caseFilterKey.value&&!caseFilterPanel.value?.contains(e.target))closeCaseFilter()}
+watch([()=>props.view,language,()=>props.role],resetCaseFilters)
+watch([query,owner,kind,caseStatus],()=>closeCaseFilter())
+onMounted(()=>{document.addEventListener('pointerdown',outsideCaseFilter);document.addEventListener('focusin',outsideCaseFilter);document.addEventListener('keydown',keyCaseFilter);window.addEventListener('resize',moveCaseFilter);window.addEventListener('scroll',moveCaseFilter,true)})
+onBeforeUnmount(()=>{document.removeEventListener('pointerdown',outsideCaseFilter);document.removeEventListener('focusin',outsideCaseFilter);document.removeEventListener('keydown',keyCaseFilter);window.removeEventListener('resize',moveCaseFilter);window.removeEventListener('scroll',moveCaseFilter,true)})
+function poDiff(o){return !!o?.sapPo&&normalizedIdentity(o.sapPo)!==normalizedIdentity(workbookIdentity(o).po)}
+function lineDiff(o){return !!o?.sapItem&&normalizedIdentity(o.sapItem)!==normalizedIdentity(workbookIdentity(o).item)}
+function materialDiff(o){return !!o?.sapPart&&String(o.sapPart).trim()!==String(o.soPart??o.part??'').trim()}
 const transport=computed(()=>imported.value?['海运','空运','快递'].map(mode=>{const os=summary.value.open.filter(o=>o.mode===mode);return {mode,rows:os.map(order=>({order})),count:os.length,value:null,groups:groupedQuantity(os,remainingQty)}}):['海运','空运','快递'].map(mode=>{const rs=summary.value.transitRows.filter(r=>r.shipment.mode===mode);return{mode,rows:rs,count:new Set(rs.map(r=>r.shipment.id)).size,value:rs.filter(r=>priceReady(r.order)).reduce((n,r)=>n+r.qty*r.order.unitPrice/(r.order.priceUnit||1),0),groups:rs.reduce((n,r)=>{n[r.order.unit]=(n[r.order.unit]||0)+r.qty;return n},{})}}))
 const age=computed(()=>[[0,15],[16,30],[31,60],[61,90],[91,Infinity]].map(([min,max])=>({label:max===Infinity?'>90':`${min}–${max}`,rows:summary.value.open.filter(o=>{const d=(Date.parse(TODAY)-Date.parse(o.created))/86400000;return d>=min&&d<=max})})))
 const shipmentRows=computed(()=>props.shipments.filter(s=>allocations(s).some(a=>props.orders.some(o=>o.id===a.order))))
@@ -98,9 +160,27 @@ function exportExceptionView(){
     <p v-if="imported" class="ops-note">{{l('当前按已导入的 SAP 参考数据核对；后续 SAP 原始快照尚未自动接入此清单。导出中的 SAP 数据时间表示参考数据日期。','Checks use imported SAP reference data. Later raw SAP snapshots are not yet applied to this list. SAP data dates in exports refer to the reference data.')}}</p>
     <div v-if="view==='data'&&!imported" class="ops-sync"><div><b>{{l('SAP 与平台核对','SAP / platform reconciliation')}}</b><small>{{l('模拟 SAP 快照','Simulated SAP snapshot')}} · {{synced?'09/08 10:00':'09/08 09:00'}} · {{l('初始化来源截至','Initial source as of')}} 09/04</small></div><Button variant="outline" :disabled="synced" @click="emit('sync')"><RefreshCw :size="15"/>{{l(synced?'示例快照已应用':'模拟接收后续 SAP 快照',synced?'Demo snapshot applied':'Simulate later SAP snapshot')}}</Button></div>
     <div class="ops-check-metrics"><div><small>{{l('未关闭事项','Open tasks')}}</small><strong>{{(view==='data'?checks:issues).filter(i=>i.status!=='已解决').length}}</strong></div><div><small>{{l('涉及订单行 · 去重','Affected lines · unique')}}</small><strong>{{new Set((view==='data'?checks:issues).filter(i=>i.status!=='已解决').map(c=>c.order)).size}}</strong></div><div><small>{{l('已通过核对／已解决','Passed / resolved')}}</small><strong>{{(view==='data'?checks:issues).filter(i=>i.status==='已解决').length}}</strong></div><div><small>{{l('处理方式','Processing')}}</small><b>{{l('规则核对 + 人员确认','Rules + human review')}}</b></div></div>
-    <div class="ops-filters ops-filter-panel"><label class="ops-search"><Search :size="16"/><input v-model="query" :placeholder="l('搜索任务或 PO','Search task or PO')"/></label><select v-model="kind" :aria-label="l('问题类型','Issue type')"><option value="">{{l('全部问题类型','All issue types')}}</option><option v-for="(title,key) in KINDS" :key="key" :value="key">{{tr(title)}}</option></select><select v-model="owner" :aria-label="l('任务责任人','Task owner')"><option value="">{{l('全部责任人','All owners')}}</option><option v-for="b in [...new Set(issues.map(i=>i.owner))]" :key="b">{{b}}</option></select><select v-model="caseStatus" :aria-label="l('任务状态','Task status')"><option value="active">{{l('未关闭','Open')}}</option><option value="closed">{{l('已解决','Resolved')}}</option><option value="all">{{l('全部状态','All states')}}</option></select><Button variant="outline" :disabled="!tasks.length" @click="exportExceptionView" :title="l('导出当前筛选的全部异常，不受分页影响','Export all matching issues across every page')"><Download :size="15"/>{{l('导出异常 Excel','Export exceptions to Excel')}}</Button><small>{{tasks.length}} {{l('条异常','issues')}}</small></div>
+    <div class="ops-filters ops-filter-panel"><label class="ops-search"><Search :size="16"/><input v-model="query" :placeholder="l('搜索任务、双方 PO 或料号','Search task, either PO or material')"/></label><select v-model="kind" :aria-label="l('问题类型','Issue type')"><option value="">{{l('全部问题类型','All issue types')}}</option><option v-for="(title,key) in KINDS" :key="key" :value="key">{{tr(title)}}</option></select><select v-model="owner" :aria-label="l('任务责任人','Task owner')"><option value="">{{l('全部责任人','All owners')}}</option><option v-for="b in [...new Set(issues.map(i=>i.owner))]" :key="b">{{b}}</option></select><select v-model="caseStatus" :aria-label="l('任务状态','Task status')"><option value="active">{{l('未关闭','Open')}}</option><option value="closed">{{l('已解决','Resolved')}}</option><option value="all">{{l('全部状态','All states')}}</option></select><Button variant="outline" :disabled="!tasks.length" @click="exportExceptionView" :title="l('导出当前筛选的全部异常，不受分页影响','Export all matching issues across every page')"><Download :size="15"/>{{l('导出异常 Excel','Export exceptions to Excel')}}</Button><small>{{tasks.length}} {{l('条异常','issues')}}</small></div>
     <p v-if="exceptionExportNotice" class="ops-note" role="status">{{exceptionExportNotice}}</p><p v-if="exceptionExportError" class="ops-error" role="alert">{{exceptionExportError}}</p>
-    <section class="ops-panel ops-scroll"><table class="ops-case-table"><thead><tr><th>{{l('问题与比对摘要','Issue & comparison')}}</th><th>PO / {{l('行','item')}}</th><th>{{l('责任人／期限','Owner / due')}}</th><th>{{l('状态','Status')}}</th><th>{{l('下一步','Next action')}}</th></tr></thead><tbody><tr v-for="c in pagedTasks" :key="c.id"><td><b>{{tr(c.title)}}</b><small>{{c.userEntered?c.detail:tr(c.detail)}}</small><small v-if="c.note">{{c.noteUserEntered||c.rule?c.note:tr(c.note)}}</small></td><td><button class="ops-link" @click="open(c.order,view==='data'?'overview':'activity')">{{order(c.order)?.po}}</button><small>{{order(c.order)?.item}}</small></td><td>{{c.owner}}<small :class="{'ops-amber':c.due<TODAY&&c.status!=='已解决'}">{{c.due}}</small></td><td><Badge :theme="c.status==='已解决'?'green':c.priority==='高'?'orange':'gray'">{{tr(c.status)}}</Badge></td><td><Button v-if="c.status!=='已解决'" variant="outline" @click="emit('review',c)">{{l(role==='buyer'?'核对与处理':'查看与跟进',role==='buyer'?'Review & act':'View & follow up')}}</Button><Button v-else variant="ghost" @click="open(c.order,'activity')">{{l('查看依据','View evidence')}}</Button></td></tr><tr v-if="!tasks.length"><td colspan="5" class="ops-empty"><CheckCheck :size="24"/>{{l('当前筛选下没有待显示的事项','No tasks match this view')}}</td></tr></tbody></table></section>
+    <div v-if="Object.keys(caseFilters).length" class="ops-case-filter-summary"><span>{{l('已筛选','Filtered columns')}}: {{Object.keys(caseFilters).map(key=>caseColumns.find(c=>c[0]===key)?.[1]).join(' · ')}}</span><button @click="resetCaseFilters">{{l('清除表头筛选','Clear column filters')}}</button></div>
+    <section class="ops-panel ops-scroll"><table class="ops-case-table">
+      <thead><tr><th v-for="[key,title] in caseColumns" :key="key"><div class="ops-case-heading"><span>{{title}}</span><button class="ops-case-filter-trigger" :class="{active:caseFilters[key]}" :aria-label="l('筛选：','Filter: ')+title" :title="l('筛选：','Filter: ')+title" aria-haspopup="dialog" :aria-expanded="caseFilterKey===key" aria-controls="exception-column-filter" @click="openCaseFilter(key,$event)"><Filter :size="13"/><span>Filter</span></button></div></th></tr></thead>
+      <tbody><tr v-for="c in pagedTasks" :key="c.id">
+        <td><b>{{tr(c.title)}}</b><small>{{c.userEntered?c.detail:tr(c.detail)}}</small><small v-if="c.note">{{c.noteUserEntered||c.rule?c.note:tr(c.note)}}</small></td>
+        <td class="ops-case-originals"><div :class="{'ops-difference':poDiff(order(c.order))}"><span>Excel PO</span><button class="ops-link" @click="open(c.order,view==='data'?'overview':'activity')">{{workbookIdentity(order(c.order)||{}).po||'—'}}</button></div><div :class="{'ops-difference':poDiff(order(c.order))}"><span>SAP PO</span><b>{{order(c.order)?.sapPo||'—'}}</b></div><small :class="{'ops-difference':lineDiff(order(c.order))}">{{l('Excel 行号','Excel line')}}: {{workbookIdentity(order(c.order)||{}).item||'—'}} / {{l('SAP 行号','SAP line')}}: {{order(c.order)?.sapItem||'—'}}</small></td>
+        <td class="ops-case-originals"><div :class="{'ops-difference':materialDiff(order(c.order))}"><span>Excel</span><b>{{(order(c.order)?.soPart??order(c.order)?.part)||'—'}}</b></div><div :class="{'ops-difference':materialDiff(order(c.order))}"><span>SAP</span><b>{{order(c.order)?.sapPart||'—'}}</b></div></td>
+        <td>{{c.owner}}<small :class="{'ops-amber':c.due<TODAY&&c.status!=='已解决'}">{{c.due}}</small></td>
+        <td><Badge :theme="c.status==='已解决'?'green':c.priority==='高'?'orange':'gray'">{{tr(c.status)}}</Badge></td>
+        <td><Button v-if="c.status!=='已解决'" variant="outline" @click="emit('review',c)">{{l(role==='buyer'?'核对与处理':'查看与跟进',role==='buyer'?'Review & act':'View & follow up')}}</Button><Button v-else variant="ghost" @click="open(c.order,'activity')">{{l('查看依据','View evidence')}}</Button></td>
+      </tr><tr v-if="!tasks.length"><td colspan="6" class="ops-empty"><CheckCheck :size="24"/>{{l('当前筛选下没有待显示的事项','No tasks match this view')}}</td></tr></tbody>
+    </table></section>
+    <Teleport to="body"><div v-if="caseFilterKey" id="exception-column-filter" ref="caseFilterPanel" class="ops-case-filter-popup" :style="caseFilterStyle" role="dialog" :aria-label="l('筛选：','Filter: ')+caseColumns.find(c=>c[0]===caseFilterKey)?.[1]">
+      <header><b>{{caseColumns.find(c=>c[0]===caseFilterKey)?.[1]}}</b><button :aria-label="l('关闭筛选','Close filter')" @click="closeCaseFilter(true)"><X :size="16"/></button></header>
+      <input ref="caseFilterInput" v-model="caseFilterDraft.query" @keydown.enter.prevent="applyCaseFilter" :aria-label="l('搜索本列','Search this column')" :placeholder="l('搜索本列…','Search this column…')"/>
+      <div class="ops-case-filter-select"><button @click="selectCaseOptions(true)">{{l('全选结果','Select results')}}</button><button @click="selectCaseOptions(false)">{{l('取消全选','Select none')}}</button></div>
+      <div class="ops-case-filter-options"><label v-for="value in visibleCaseOptions" :key="value"><input type="checkbox" :checked="caseOptionSelected(value)" @change="toggleCaseOption(value)"/><span>{{value}}</span></label><p v-if="!visibleCaseOptions.length">{{l('无匹配值','No matching values')}}</p></div>
+      <footer><button @click="clearCaseFilter">{{l('清除此列','Clear column')}}</button><button class="ops-case-filter-apply" @click="applyCaseFilter">{{l('应用筛选','Apply filter')}}</button></footer>
+    </div></Teleport>
     <details v-if="view==='data'" class="ops-definitions" open><summary>{{l('字段归属与初始化规则','Field ownership & initialization')}}</summary><div class="ops-ownership"><div><b>SAP</b><p>{{l('正式 PO／SO、订购数量、价格、单位、发货及收货过账。保留原值和同步时间。','Formal PO/SO, ordered quantities, prices, units, PGI and receipts. Original values and sync times are retained.')}}</p></div><div><b>{{l('协作平台','Collaboration platform')}}</b><p>{{l('承诺、国内 ETA、业务报发、装载位置、备注、异常处理。SAP 同步不覆盖这些协作记录。','Commitments, China ETA, dispatch reports, loading positions, notes and issue handling. SAP sync does not overwrite these records.')}}</p></div><div><b>{{l('Excel 初始化','Excel initialization')}}</b><p>{{l('首次导入保留文件行号和原值，后续协作在平台维护。','Initial import retains source rows and originals; ongoing collaboration is maintained in the platform.')}}</p></div></div><p v-if="!imported">{{l('模拟快照只为示例批次 SHP-DEMO-003 补充 SAP 过账；不会把新登记的报发自动当作 SAP 发货。正式环境需要内网同步服务。','The demo snapshot supplies PGI only for SHP-DEMO-003. New dispatch reports are never automatically treated as SAP PGI. Production requires an internal sync service.')}}</p></details>
   </template>
 

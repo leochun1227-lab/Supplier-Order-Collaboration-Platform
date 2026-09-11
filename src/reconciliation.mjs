@@ -1,6 +1,12 @@
 import { TODAY, seedOrders, seedShipments, daysLate, openQty } from './domain.mjs'
+import { identityValue, normalizedIdentity, workbookIdentity } from './sap-reference.mjs'
+export { workbookIdentity } from './sap-reference.mjs'
 export const label=(zh,en)=>({zh,en})
 export const KINDS={
+  po:label('SAP 与总表 PO 不一致','SAP / workbook PO mismatch'),
+  po_line:label('SAP 与总表订单行不一致','SAP / workbook line mismatch'),
+  po_line_missing:label('总表订单行缺失','Workbook order line missing'),
+  sap_reference:label('SAP 参考记录待关联','SAP reference requires linking'),
   initialization:label('初始化记录待核对','Initialization review'),
   shipment:label('报发与 SAP 待核对','Reported shipment / SAP'),
   material:label('物料与单位待确认','Material / unit mapping'),
@@ -55,6 +61,10 @@ export const groupLabel=groups=>Object.entries(groups).map(([u,q])=>`${q.toLocal
 export function factsFor(o,shipments){
   const related=relatedShipments(o,shipments)
   return [
+    ...(o.imported?[
+      {field:label('采购订单 PO','Purchase order'),sap:o.sapPo||'—',business:workbookIdentity(o).po||'—',source:label('Excel 总表','Excel workbook'),adopted:label('双方原值保留','Both originals retained')},
+      {field:label('采购订单行','Purchase order line'),sap:o.sapItem||'—',business:workbookIdentity(o).item||'—',source:label('Excel 总表','Excel workbook'),adopted:label('双方原值保留','Both originals retained')},
+    ]:[]),
     {field:label('物料编码','Material'),sap:o.sapPart||'—',business:o.soPart??o.part??'—',source:label('工厂 SO／平台','Factory SO / platform'),adopted:mappingReady(o)?label('对应关系已确认','Mapping confirmed'):label('双方原值保留','Both originals retained')},
     {field:label('计量单位','Unit'),sap:o.unit||'EA',business:o.soUnit||o.unit||'EA',source:label('工厂 SO','Factory SO'),adopted:o.mapping?`1 ${o.soUnit} = ${o.mapping.factor} ${o.unit}`:label('按原单位展示','Shown in original units')},
     {field:label('发运数量','Dispatched quantity'),sap:`${o.shipped??'—'} ${o.unit||'EA'}`,business:`${reportedQty(o)} ${o.unit||'EA'}`,source:o.cooperationSource||label('平台','Platform'),adopted:label('分别保留报发与过账','Report and PGI kept separately')},
@@ -67,9 +77,27 @@ export function detectChecks(orders,shipments,today=TODAY){
   const add=(o,kind,evidence,priority='中')=>found.push({id:`CHECK-${o.id}-${kind}`,order:o.id,kind,category:'数据问题',title:KINDS[kind],detail:evidence,owner:o.buyer,priority,due:today,status:'待处理',note:'',fingerprint:JSON.stringify([kind,evidence]),rule:true})
   for(const o of orders){
     if(o.imported){
-      if(o.workbookIdentityChanged&&!mappingReady(o))add(o,'material',`${o.sapPart||'—'} / ${o.unit} ↔ ${o.soPart||'—'} / ${o.soUnit}`)
+      const business=workbookIdentity(o)
+      if(identityValue(o.sapPo)&&identityValue(o.sapItem)) {
+        for(const [kind,key,sap]of [['po','po',o.sapPo],['po_line','item',o.sapItem]]) {
+          if(kind==='po_line'&&!identityValue(business.item)) {
+            add(o,'po_line_missing',label(`总表 Line No 未填写（原值：${business.item||'空白'}）；SAP 订单行：${sap}。这不是 PO 或料号不一致。`,`Workbook Line No is missing (original: ${business.item||'blank'}); SAP order line: ${sap}. This is not a PO or material mismatch.`))
+            continue
+          }
+          if(normalizedIdentity(sap)!==normalizedIdentity(business[key]))add(o,kind,`SAP: ${sap} ↔ Excel: ${business[key]||'—'}`,'高')
+        }
+      } else {
+        const unavailable=o.sapReferenceStatus!=='unmatched'
+        add(o,'sap_reference',label(
+          `${unavailable?'SAP 参考数据未能读取，请刷新重试':'当前导入参考中未建立唯一 SAP 关联，需核实来源'}；Excel PO: ${business.po||'—'} / 行: ${business.item||'—'}`,
+          `${unavailable?'SAP reference unavailable; reload to retry':'No unique SAP link in the imported reference; verify the source'}; Excel PO: ${business.po||'—'} / line: ${business.item||'—'}`))
+      }
+      if((o.workbookMaterialChanged||o.sapPart&&o.sapPart!==o.soPart)&&!mappingReady(o))add(o,'material',`${o.sapPart||'—'} / ${o.unit} ↔ ${o.soPart||'—'} / ${o.soUnit}`)
       if(openQty(o)<=0)continue
-      if(o.importChecks?.length)add(o,'initialization',o.importChecks.map(c=>`${c.title.zh} / ${c.title.en}`).join('; '))
+      // These two facts now have live rules; stale import warnings must not remain
+      // open after the workbook is corrected or its material mapping is confirmed.
+      const initialChecks=o.importChecks?.filter(c=>!['sap_link','material'].includes(c.kind))||[]
+      if(initialChecks.length)add(o,'initialization',initialChecks.map(c=>`${c.title.zh} / ${c.title.en}`).join('; '))
       if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit}`)
       if(remainingQty(o)>0&&(!o.promisedEtd||o.promisedEtd<today||o.dispatchDelayStatus==='delayed'))add(o,'delivery',`${o.promisedEtd||'TBD'}; ${remainingQty(o)} ${o.unit}; ${o.dispatchDelayReason||''}`,'高')
       const delayed=relatedShipments(o,shipments).filter(s=>shipmentDelayed(s,today))
@@ -93,7 +121,14 @@ export function detectChecks(orders,shipments,today=TODAY){
 export function reconcile(orders,shipments,previous=[],today=TODAY){
   const detected=detectChecks(orders,shipments,today),old=new Map(previous.map(c=>[c.id,c])),ids=new Set(detected.map(c=>c.id))
   const current=detected.map(c=>{const prior=old.get(c.id);const result=prior?{...prior,...c,owner:prior.owner,due:prior.due,note:prior.note,log:prior.log||[],status:prior.status!=='已解决'&&prior.fingerprint===c.fingerprint?prior.status:'待处理'}:{...c,log:[]};delete result.closure;return result})
-  return [...current,...previous.filter(c=>!ids.has(c.id)).map(c=>({...c,status:'已解决',closure:label('当前事实已通过规则核对','Current facts pass the rule')}))]
+  const byOrder=new Map(orders.map(o=>[o.id,o]))
+  return [...current,...previous.filter(c=>!ids.has(c.id)).map(c=>{
+    const o=byOrder.get(c.order)
+    // Missing reference data is not evidence that a previously found PO mismatch passed.
+    if(['po','po_line','po_line_missing'].includes(c.kind)&&o&&(!identityValue(o.sapPo)||!identityValue(o.sapItem)))return {...c}
+    if(c.kind==='po_line'&&o&&!identityValue(workbookIdentity(o).item))return {...c,status:'已解决',closure:label('已重新归类为总表订单行缺失，请查看对应待补充事项','Reclassified as a missing workbook order line; see the corresponding open task')}
+    return {...c,status:'已解决',closure:label('当前事实已通过规则核对','Current facts pass the rule')}
+  })]
 }
 export function updateCase(cases,id,{owner,due,note},now=TODAY){
   const c=cases.find(c=>c.id===id);if(!c)throw new Error('case_missing')

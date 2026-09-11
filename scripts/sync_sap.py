@@ -80,10 +80,15 @@ def connection_string(config):
     if result.returncode:
         raise ValueError('credential_unavailable_for_windows_user')
     values = json.loads(result.stdout.decode('utf-8-sig'))
-    def quote(value):
-        return '{' + str(value).replace('}', '}}') + '}'
-    return ';'.join(f'{key}={quote(value)}' for key, value in {
-        'DRIVER': 'HDBODBC', 'SERVERNODE': config['serverNode'],
+    # HDBODBC treats braces in UID/PWD as literal credential characters.
+    # Reject delimiters rather than allowing values to inject connection options.
+    def hana_value(value):
+        value = str(value)
+        if not value or any(char in value for char in ';\r\n\0'):
+            raise ValueError('unsupported_hana_connection_value')
+        return value
+    return 'DRIVER={HDBODBC};' + ';'.join(f'{key}={hana_value(value)}' for key, value in {
+        'SERVERNODE': config['serverNode'],
         'UID': values['user'], 'PWD': values['password'],
     }.items()) + ';'
 
@@ -94,10 +99,18 @@ def extract(config, connect=None):
         connect = pyodbc.connect
     queries = {name: query_for(name, config) for name in TABLE_KEYS}
     started = millis()
-    conn = connect(connection_string(config), timeout=20, readonly=True, autocommit=False)
+    # HDBODBC rejects SQL_ATTR_ACCESS_MODE (HYC00). Read-only behavior is
+    # enforced by the SELECT-only query validation above and the SAP account.
+    conn = connect(connection_string(config), timeout=20, autocommit=False)
     tables = {}
     try:
-        conn.timeout = 120
+        try:
+            conn.timeout = 120
+        except Exception as error:
+            # Some HDBODBC versions do not expose the optional connection
+            # timeout attribute. Do not turn a successful login into a failure.
+            if not error.args or error.args[0] != 'HYC00':
+                raise
         for name, sql in queries.items():
             cursor = conn.cursor()
             try:

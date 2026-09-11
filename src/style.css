@@ -82,3 +82,29 @@ main.parts-main{max-width:none;min-width:0;padding:20px 22px 18px}@media(max-wid
 .parts-layout .pw-heading .mobile-menu{min-height:25px;padding:1px 5px;font-size:12px;gap:4px}
 .parts-layout .pw-heading .language-switch>button{min-height:23px;padding:1px 6px;line-height:21px}
 .parts-layout .pw-heading .topbar-right{flex-shrink:0}
+.ops-case-table{min-width:1150px}
+.ops-case-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ops-case-filter-trigger{display:inline-flex;align-items:center;gap:3px;padding:3px 5px;border:1px solid #ccdce5;border-radius:4px;background:white;color:#587787;font-size:11px}
+.ops-case-filter-trigger:hover,.ops-case-filter-trigger.active{color:#146775;background:#e1f2ef;border-color:#61a599}
+.ops-case-filter-trigger:focus-visible,.ops-case-filter-popup button:focus-visible{outline:2px solid #14798a;outline-offset:2px}
+.ops td.ops-case-originals{min-width:190px;max-width:300px;overflow-wrap:anywhere}
+.ops-case-originals>div{display:flex;align-items:baseline;gap:8px;padding:3px 5px;border-radius:3px}
+.ops-case-originals>div>span{font-size:11px;color:#637d89;min-width:53px;flex-shrink:0}
+.ops-case-originals b,.ops-case-originals .ops-link{font-size:13px;font-weight:550}
+.ops-case-originals .ops-difference{background:#fff1dc;color:#95530a}
+.ops-case-originals .ops-difference .ops-link{color:inherit}
+.ops-case-originals small.ops-difference{padding:3px 5px;border-radius:3px}
+.ops-case-filter-summary{display:flex;align-items:center;gap:12px;font-size:12px;margin:8px 0;color:#376675}
+.ops-case-filter-summary button{color:#14798a;text-decoration:underline}
+.ops-case-filter-popup{position:fixed;z-index:1800;overflow:auto;background:white;border:1px solid #c9dce4;border-radius:7px;padding:12px;box-shadow:0 8px 26px #153e592b;font-size:13px;color:#254759}
+.ops-case-filter-popup header,.ops-case-filter-popup footer{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ops-case-filter-popup header{margin-bottom:10px}
+.ops-case-filter-popup>input{width:100%;border:1px solid #c9dce4;border-radius:4px;padding:7px 9px;font-size:13px}
+.ops-case-filter-select{display:flex;justify-content:space-between;padding:8px 0;color:#167184;font-size:12px}
+.ops-case-filter-options{max-height:205px;overflow:auto;border-block:1px solid #e4edf1;padding:4px 0}
+.ops-case-filter-options label{display:flex;gap:8px;align-items:flex-start;padding:5px 3px;overflow-wrap:anywhere;cursor:pointer}
+.ops-case-filter-options input{margin-top:3px;flex-shrink:0;accent-color:#246474}
+.ops-case-filter-options label:hover{background:#edf6f7}
+.ops-case-filter-popup footer{margin-top:10px}
+.ops-case-filter-popup footer button{padding:6px 9px;border-radius:4px}
+.ops-case-filter-apply{background:#246474;color:#fff}

@@ -1,6 +1,7 @@
 import { projectState,hydrateState,changeSummary } from './persistence.mjs'
 import { sharedWorkbookState, retainHiddenWorkbookRecords } from './parts-workbook-link.mjs'
 import { sheetValues } from './parts-workbook.mjs'
+import { loadSapReferences } from './sap-reference.mjs'
 export const PUBLIC_DATABASE='https://supplier-collaboration-30ddf-default-rtdb.asia-southeast1.firebasedatabase.app'
 export async function connectPublicWorkspace(onChange,onError,{workspace='excel-20260904',fetcher=fetch,interval=15000,databaseURL=PUBLIC_DATABASE}={}){
   if(!/^[a-z0-9-]+$/.test(workspace))throw new Error('invalid_workspace')
@@ -9,6 +10,7 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
   const source=await (await request('source')).json()
   if(source?.kind!=='excel'||source.schemaVersion!==1)throw new Error('source_not_ready')
   const data=JSON.parse(source.dataJson);let revision=-1,latest={},stopped=false,refreshing=null,workbook=null,workbookRevision=0,workbookSavedAt=null
+  await loadSapReferences(data,source,{databaseURL,fetcher})
   const compose=()=>sharedWorkbookState(data,latest.stateJson?JSON.parse(latest.stateJson):{},workbook,latest.workbookBaseline)
   function deliver(){
     const {state}=compose(), summary={...source.summary}

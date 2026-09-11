@@ -14,6 +14,15 @@ test('Excel completion is not treated as SAP receipt or AU ETA',()=>{
   loaded.orders[1].reported=49;assert.equal(openQty(loaded.orders[1]),1)
 })
 
+test('import adapter retains SAP PO and line separately from workbook values',()=>{
+  const r=record('a','NG',20,0,20)
+  r.sapOriginal={EBELN:'4900099999',EBELP:'00020',MATNR:'PART',MENGE:20,MEINS:'EA'}
+  const o=excelWorkspace({...batch,records:{a:r}}).data.orders[0]
+  assert.equal(o.sapPo,'4900099999');assert.equal(o.sapItem,'00020')
+  assert.equal(o.po,'4900000001');assert.equal(o.item,'00010')
+  assert.equal(o.sapReferenceStatus,'matched')
+})
+
 test('confirmed owner mapping classifies purpose without replacing source category or existing decisions',async()=>{
   const {classifyOrders}=await import('../scripts/order-purpose.mjs')
   const rows=[

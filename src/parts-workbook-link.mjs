@@ -17,7 +17,7 @@ function newOrder(id) {
   return {id,imported:true,workbookCreated:true,importCompletion:'',cancelled:false,qty:0,qtyKnown:false,sourceReported:0,sourceRemaining:null,reported:0,
     po:'—',item:'—',part:'',name:'',en:'',supplier:'—',upstreamSupplier:'',buyer:'—',type:'用途待确认',sourceType:'unknown',mode:'—',created:'',
     received:null,shipped:null,receiptsKnown:false,pgiKnown:false,quantityComparable:false,unit:'?',unitPrice:null,priceUnit:1,currency:'—',plant:'—',
-    sapPart:'',soPart:'',so:'',soQty:null,soUnit:'?',mapping:null,priceConfirmed:false,
+    sapPart:'',sapPo:'',sapItem:'',sapReferenceStatus:'unmatched',soPart:'',so:'',soQty:null,soUnit:'?',mapping:null,priceConfirmed:false,
     required:'',eta:'',originalEta:'',initialEtd:'',promisedEtd:'',chinaEta:'',confirmed:false,status:'待确认',dispatchDelayStatus:'unknown',dispatchDelayReason:'',remainingPlan:'',
     sourceAsOf:'',sapAsOf:'',syncedAt:'',batches:[],pending:null,comments:[],dispatchUpdates:[],history:[],importFields:{},importEvidence:[],importChecks:[],importNotes:''}
 }
@@ -74,6 +74,7 @@ export function workbookProjection(source, book) {
     set('importCompletion',text(f.completion),'completion'); set('cancelled',f.completion==='澳洲取消订单','completion')
     set('importNotes',text(f.notes),'notes')
     order.workbookIdentityChanged=has('po','line','material')
+    order.workbookMaterialChanged=has('material')
     if (order.workbookIdentityChanged) { order.quantityComparable=false; order.mapping=null; order.priceConfirmed=false }
     const candidates = {
       reported:number(f.shipped)??0,

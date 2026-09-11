@@ -1,12 +1,13 @@
 import { zipSync, strToU8 } from 'fflate'
 import { translate } from './translations.mjs'
-import { KINDS } from './reconciliation.mjs'
+import { KINDS, workbookIdentity } from './reconciliation.mjs'
 import { columnName } from './parts-workbook.mjs'
 
 const columns = [
   ['异常编号','Issue ID',28], ['问题类型','Issue type',24], ['问题标题','Issue title',30],
   ['比对摘要／异常记录','Comparison / recorded issue',60], ['优先级','Priority',12], ['处理状态','Status',16],
-  ['PO','PO',20], ['订单行','Order line',12], ['SO','SO',20],
+  ['总表／业务 PO','Workbook / business PO',20], ['总表／业务订单行','Workbook / business line',18],
+  ['SAP PO','SAP PO',20], ['SAP 订单行','SAP line',16], ['SO','SO',20],
   ['当前 SAP 料号','Current SAP material',24], ['当前总表／业务料号','Current workbook / business material',28],
   ['SAP 单位','SAP unit',12], ['总表／业务单位','Workbook / business unit',18],
   ['责任人','Owner',22], ['处理期限','Due date',16], ['处理备注','Review notes',48], ['关闭依据','Closure evidence',44],
@@ -20,7 +21,7 @@ export function exceptionExportRows(tasks, orders, {language='zh', exportedAt=ne
     const order=byId.get(task.order)||{}
     return [task.id, tr(KINDS[task.kind]||task.category||''), text(task.title,task.userEntered),
       text(task.detail,task.userEntered), tr(task.priority||''), tr(task.status||''),
-      order.po??'',order.item??'',order.so??'',order.sapPart??'',order.soPart??order.part??'',
+      workbookIdentity(order).po,workbookIdentity(order).item,order.sapPo??'',order.sapItem??'',order.so??'',order.sapPart??'',order.soPart??order.part??'',
       order.unit??'',order.soUnit??'',task.owner??'',task.due??'',
       text(task.note,task.noteUserEntered||task.rule),tr(task.closure||''),
       (order.importEvidence||[]).map(e=>[e.file,e.sheet,e.row].filter(v=>v!=null&&v!=='').join(' / ')).join('\n'),
