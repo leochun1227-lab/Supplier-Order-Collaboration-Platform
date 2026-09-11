@@ -17,5 +17,5 @@ const {data,...metadata}=source
 const result=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json','If-Match':read.headers.get('etag')},body:JSON.stringify({...metadata,dataJson:JSON.stringify(data)}),signal:AbortSignal.timeout(60000)})
 if(!result.ok)throw new Error(`Write HTTP ${result.status}`)
 const verified=await (await fetch(url)).json(),loaded=JSON.parse(verified.dataJson)
-if(loaded.orders.length!==1253||verified.generation!==source.generation)throw new Error('Verification failed')
+if(loaded.orders.length!==source.data.orders.length||verified.generation!==source.generation)throw new Error('Verification failed')
 console.log(JSON.stringify({verified:true,orders:loaded.orders.length,dispatchSummaries:loaded.shipments.length,completion:source.summary.masterCompletion}))

@@ -18,6 +18,9 @@ FILES = {
     'delayed': '每周延迟发运（截止9.4）.xlsx',
     'master': '2026 Parts order list发澳洲.xlsx',
 }
+FILE_PATTERNS = {'master':'*Parts order list*.xlsx','weekly':'*澳洲采购及售后配件发运*.xlsx','open':'*澳洲备品备件未完成清单*.xlsx','delayed':'*每周延迟发运*.xlsx'}
+HEADERS = ['序号No.','属性Attribute','订单号Purchase Order','Line No','车架号Van number:','物品名称Description','Description','供应商Supplier（历史来料数据 仅供参考）','SAP料号Stockcode','需求数量Qty','分类Category','销售凭证Sales Doc','订货人Order By','订货时间Order Date','约定发运时间Agreed ETD','计划发运时间ETD','采购经理Purchase Manager','计划到货时间（采购提供的到货时间）ETA China','实际发运时间Actual Ship Date','实发数量Shipped Qty','剩余未发数量Remaining Qty','海运车架号VAN(Container)','位置Location','集装箱号Container No.','空运单号AWB No.','评价Completion Status','备注Remarks']
+WEEKLY_HEADERS = ['澳洲订单号','物料','Part name','物料编码','订货人','销售凭证','需求数量','本次发运数量','发运日期','海运车架号（集装箱）','存放位置','集装箱号','空运单号','图片']
 FIELDS = ['seq','mode','po','line','van','description_zh','description_en','supplier_reference','material','qty','category','so','buyer','ordered','agreed_etd','planned_etd','manager','eta_china','actual_ship','shipped','remaining','loaded_van','location','container','awb','completion','notes']
 WEEKLY = ['po','description_zh','description_en','material','buyer','so','qty','shipped','actual_ship','loaded_van','location','container','awb','image']
 
@@ -43,12 +46,32 @@ def candidates(value,kind):
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
+def validate_headers(values, role):
+    expected = WEEKLY_HEADERS if role == 'weekly' else HEADERS[:16]+['ETA']+HEADERS[16:] if role == 'delayed' else HEADERS
+    normal = lambda v: re.sub(r'\s+', '', text(v)).casefold().replace('（','(').replace('）',')')
+    if len(values) < len(expected) or any(normal(values[i]) != normal(h) for i,h in enumerate(expected)):
+        raise ValueError(f'Changed or missing {role} columns; import stopped to prevent shifted fields')
+
+def discover_files(directory, explicit=None):
+    result={}
+    for role,pattern in FILE_PATTERNS.items():
+        paths=[pathlib.Path(explicit[role])] if explicit and explicit.get(role) else [p for p in directory.glob(pattern) if not p.name.startswith('~$')]
+        if len(paths)!=1 or not paths[0].is_file():
+            raise ValueError(f'Expected one {role} workbook; found {len(paths)}. Select the four files explicitly; no date-based guessing.')
+        result[role]=paths[0]
+    if len({p.resolve() for p in result.values()}) != 4:
+        raise ValueError('Each workbook role requires a different file')
+    return result
+
 def read_book(path,role):
     sha=hashlib.sha256(path.read_bytes()).hexdigest()
     book=openpyxl.load_workbook(path,read_only=True,data_only=True)
     raw={};records=[]
     try:
         for sheet_index,sheet in enumerate(book):
+            if sheet_index == 0:
+                header_row=3 if role=='master' else 1
+                validate_headers(next(sheet.iter_rows(min_row=header_row,max_row=header_row,values_only=True)),role)
             rows={}
             for number,values in enumerate(sheet.iter_rows(values_only=True),1):
                 if not any(v is not None for v in values):continue
@@ -77,9 +100,9 @@ def match_rows(extra,masters):
         matches.append(master)
     return matches
 
-def prepare(directory,sap_dir):
+def prepare(directory,sap_dir,files=None):
     manifests={};sources={}
-    for role,name in FILES.items():manifests[role],sources[role]=read_book(directory/name,role)
+    for role,path in discover_files(directory,files).items():manifests[role],sources[role]=read_book(path,role)
     masters=sources['master'];records={m['id']:{**m,'evidence':[m['id']],'sapMatches':[],'review':[]} for m in masters}
     source_rows={r['id']:r for rows in sources.values() for r in rows};issues={};links={}
     def issue(kind,record,evidence,detail):
@@ -125,7 +148,9 @@ def prepare(directory,sap_dir):
     return content
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--directory',type=pathlib.Path,required=True);parser.add_argument('--sap-directory',type=pathlib.Path);parser.add_argument('--output',type=pathlib.Path,required=True);args=parser.parse_args()
-    result=prepare(args.directory,args.sap_directory);args.output.parent.mkdir(parents=True,exist_ok=True)
+    parser=argparse.ArgumentParser();parser.add_argument('--directory',type=pathlib.Path,required=True);parser.add_argument('--sap-directory',type=pathlib.Path);parser.add_argument('--output',type=pathlib.Path,required=True)
+    for role in FILES:parser.add_argument('--'+role,type=pathlib.Path)
+    args=parser.parse_args()
+    result=prepare(args.directory,args.sap_directory,{role:getattr(args,role) for role in FILES});args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps({'batchId':result['batchId'],**result['summary']},ensure_ascii=False))

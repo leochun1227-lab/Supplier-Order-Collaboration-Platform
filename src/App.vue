@@ -17,7 +17,7 @@ import RecordFacts from './RecordFacts.vue'
 import ReviewDialog from './ReviewDialog.vue'
 import DispatchDialog from './DispatchDialog.vue'
 import ShipmentEditor from './ShipmentEditor.vue'
-import { workspaceOrders, workspaceShipments, reconcile, updateCase, resolveFact, recordDispatch, applyDemoSnapshot, validDate, label, reportedQty, allocations, updateShipment } from './reconciliation.mjs'
+import { isHistoricalOrder, workspaceOrders, workspaceShipments, reconcile, updateCase, resolveFact, recordDispatch, applyDemoSnapshot, validDate, label, reportedQty, allocations, updateShipment } from './reconciliation.mjs'
 import { money } from './analytics.mjs'
 import { translate } from './translations.mjs'
 
@@ -52,7 +52,7 @@ async function savedAction(name,action){
   if(!cloudConnected.value){if(publicTestEnabled)throw new Error(tr(label('请先连接 Firebase 再保存。','Connect to Firebase before saving.')));return action()}
   const before=captureState(),expected=cloudRevision.value,ui={modal:modalOpen.value,review:reviewOpen.value,dispatch:dispatchOpen.value}
   cloudBusy.value=true;cloudError.value='';pendingToast=null;error.value=''
-  try{action();if(error.value)throw new Error('validation_failed');await nextTick();const result=await cloud.save(captureState(),name,expected,cloudGeneration,cloudWorkbookRevision);if(result){cloudRevision.value=result.revision;cloudSavedAt.value=result.at}cloudBusy.value=false;if(pendingToast)toast(pendingToast);if(pendingRemote&&pendingRemote.revision<=cloudRevision.value&&(pendingRemote.workbookRevision||0)<=cloudWorkbookRevision)pendingRemote=null}
+  try{action();if(error.value)throw new Error('validation_failed');await nextTick();const result=await cloud.save(captureState(),name,expected,cloudGeneration,cloudWorkbookRevision);if(result){cloudRevision.value=result.revision;cloudSavedAt.value=result.at}cloudBusy.value=false;if(pendingToast)toast(pendingToast);if(pendingRemote&&(pendingRemote.revision<cloudRevision.value||(pendingRemote.workbookRevision||0)<cloudWorkbookRevision))pendingRemote=null}
   catch(e){applyState(before);modalOpen.value=ui.modal;reviewOpen.value=ui.review;dispatchOpen.value=ui.dispatch;cloudError.value=e.message==='validation_failed'?tr(error.value):cloudMessage(e);throw new Error(cloudError.value)}
   finally{cloudBusy.value=false;pendingToast=null;if(pendingRemote&&!detailOpen.value&&!modalOpen.value&&!reviewOpen.value&&!dispatchOpen.value){applyRemote(pendingRemote);pendingRemote=null}}
 }
@@ -76,8 +76,8 @@ nav.splice(2,0,{id:'parts',title:{zh:'备品备件表格',en:'Parts workbook'},i
 titles.parts=[{zh:'备品备件表格',en:'Parts workbook'},'']
 const visible=computed(()=>orders.value.filter(o=>canSee(o,role.value)))
 titles.overview=['总览看板','掌握订单、在途货物与交付风险。']
-const visibleIssues=computed(()=>allIssues.value.filter(i=>visible.value.some(o=>o.id===i.order)))
-const activeIssues=computed(()=>visibleIssues.value.filter(i=>i.status!=='已解决'))
+const visibleIssues=computed(()=>allIssues.value.filter(i=>visible.value.some(o=>o.id===i.order)||role.value==='buyer'&&i.sourceRecord))
+const activeIssues=computed(()=>visibleIssues.value.filter(i=>i.status!=='已解决'&&!isHistoricalOrder(visible.value.find(o=>o.id===i.order))))
 const visibleShipments=computed(()=>shipments.value.filter(s=>!s.deletedAt).filter(s=>allocations(s).some(a=>visible.value.some(o=>o.id===a.order))))
 const pending=computed(()=>visible.value.filter(o=>o.pending))
 const unconfirmed=computed(()=>visible.value.filter(o=>!o.confirmed))
@@ -109,7 +109,7 @@ function openModal(kind){modal.value=kind;error.value='';reason.value='';modalOp
 function startResponse(){response.value='confirm';batches.value=[{qty:openQty(selected.value),date:selected.value.eta||selected.value.required}];openModal('response')}
 function startEta(){batches.value=selected.value.batches.map(b=>({...b}));if(!batches.value.length)batches.value=[{qty:openQty(selected.value),date:selected.value.required}];openModal('eta')}
 function stamp(){return new Date().toISOString()}
-function addEvent(order,text,english){if(english)text={zh:text,en:english};order.history.unshift({who:role.value==='buyer'?'Regent · 采购':'Longtree · 供应商',time:stamp(),text})}
+function addEvent(order,text,english){if(!order)return;if(english)text={zh:text,en:english};order.history.unshift({who:role.value==='buyer'?'Regent · 采购':'Longtree · 供应商',time:stamp(),text})}
 function local_submitResponse(){try{
   const order=selected.value
   if(role.value!=='supplier'||!canSee(order,role.value))throw new Error('请切换到 Longtree 供应商视角进行响应。')

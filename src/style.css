@@ -108,3 +108,4 @@ main.parts-main{max-width:none;min-width:0;padding:20px 22px 18px}@media(max-wid
 .ops-case-filter-popup footer{margin-top:10px}
 .ops-case-filter-popup footer button{padding:6px 9px;border-radius:4px}
 .ops-case-filter-apply{background:#246474;color:#fff}
+.ops-exception-scopes{margin-bottom:12px;width:fit-content;max-width:100%;overflow:auto}

@@ -1,9 +1,10 @@
 import { projectState,hydrateState,changeSummary } from './persistence.mjs'
 import { sharedWorkbookState, retainHiddenWorkbookRecords } from './parts-workbook-link.mjs'
 import { sheetValues } from './parts-workbook.mjs'
-import { loadSapReferences } from './sap-reference.mjs'
+import { loadSapReferences, refreshSapSnapshot } from './sap-reference.mjs'
+import { createSapAnchorStore } from './sap-anchor-store.mjs'
 export const PUBLIC_DATABASE='https://supplier-collaboration-30ddf-default-rtdb.asia-southeast1.firebasedatabase.app'
-export async function connectPublicWorkspace(onChange,onError,{workspace='excel-20260904',fetcher=fetch,interval=15000,databaseURL=PUBLIC_DATABASE}={}){
+export async function connectPublicWorkspace(onChange,onError,{workspace='excel-20260904',fetcher=fetch,interval=15000,databaseURL=PUBLIC_DATABASE,persistSapLinks=true}={}){
   if(!/^[a-z0-9-]+$/.test(workspace))throw new Error('invalid_workspace')
   const base=`${databaseURL}/supplierCollaboration/workspaces/${workspace}`
   async function request(path,options={}){const r=await fetcher(`${base}/${path}.json`,{signal:AbortSignal.timeout(45000),...options});if(!r.ok)throw new Error(r.status===412?'save_conflict':`firebase_http_${r.status}`);return r}
@@ -11,6 +12,8 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
   if(source?.kind!=='excel'||source.schemaVersion!==1)throw new Error('source_not_ready')
   const data=JSON.parse(source.dataJson);let revision=-1,latest={},stopped=false,refreshing=null,workbook=null,workbookRevision=0,workbookSavedAt=null
   await loadSapReferences(data,source,{databaseURL,fetcher})
+  let sapRun=null
+  const anchorStore=persistSapLinks?createSapAnchorStore({base,generation:source.generation,fetcher}):undefined
   const compose=()=>sharedWorkbookState(data,latest.stateJson?JSON.parse(latest.stateJson):{},workbook,latest.workbookBaseline)
   function deliver(){
     const {state}=compose(), summary={...source.summary}
@@ -27,6 +30,7 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
       const [version,parts]=await Promise.all([next>revision&&key?request(`versions/${key}`).then(r=>r.json()):null,request('partsWorkbook').then(r=>r.json())])
       if(stopped)return
       let changed=false
+      try{const nextRun=await refreshSapSnapshot(data,{databaseURL,fetcher,previousRun:sapRun,anchorStore});if(nextRun!==sapRun){sapRun=nextRun;changed=true}for(const o of data.orders)if(o.sapReferenceRefreshError){o.sapReferenceRefreshError=false;changed=true}}catch{for(const o of data.orders)o.sapReferenceRefreshError=true;changed=true}
       if(next>revision){if(key&&version?.revision!==next)throw new Error('invalid_revision');latest=version||{};revision=next;changed=true}
       if(parts&&parts.revision>workbookRevision){if(parts.schemaVersion!==1||typeof parts.bookJson!=='string')throw new Error('invalid_workbook');workbook=JSON.parse(parts.bookJson);workbookRevision=parts.revision;workbookSavedAt=parts.savedAt;changed=true}
       if(changed)deliver()

@@ -173,9 +173,9 @@ test('SAP comparison view filters by either original PO and shows both PO lines 
     sapPo:'SAP-ORIGINAL',sapItem:'00010',sapReferenceStatus:'matched',
     po:'EXCEL-NEW',item:'00020',importFields:{po:'EXCEL-NEW',line:'00020'}}
   const issues=reconciliation.reconcile([o],[])
-  const Ops=component('Operations.vue','query,kind,tasks')
+  const Ops=component('Operations.vue','query,kind,tasks,caseScope')
   const View={...Ops,setup(props,ctx){return Ops.setup(props,{...ctx,expose(s){
-    s.kind.value='po'
+    s.caseScope.value='history';s.kind.value='po'
     for(const query of ['SAP-ORIGINAL','EXCEL-NEW']) {
       s.query.value=query;assert.equal(s.tasks.value.length,1)
     }
@@ -188,10 +188,10 @@ test('SAP comparison view filters by either original PO and shows both PO lines 
 
 test('each exception displays simultaneous PO and material differences with six header filters',async()=>{
   i18n.setLanguage('en')
-  const o={...reconciliation.workspaceOrders()[0],id:'both',imported:true,cancelled:true,
+  const o={...reconciliation.workspaceOrders()[0],id:'both',imported:true,cancelled:false,
     sapPo:'SAP-PO-OLD',sapItem:'00010',sapReferenceStatus:'matched',sapPart:'SAP-MATERIAL-OLD',soPart:'EXCEL-MATERIAL-NEW',
     importFields:{po:'EXCEL-PO-NEW',line:'00010'}}
-  const issues=reconciliation.reconcile([o],[])
+  const issues=reconciliation.reconcile([o],[]).filter(c=>['po','material'].includes(c.kind))
   assert.ok(issues.some(c=>c.kind==='po'));assert.ok(issues.some(c=>c.kind==='material'))
   const html=await renderToString(Vue.createSSRApp(component('Operations.vue'),{view:'exceptions',orders:[o],issues,shipments:[],role:'buyer'}))
   assert.equal((html.match(/aria-haspopup="dialog"/g)||[]).length,6)
@@ -202,6 +202,40 @@ test('each exception displays simultaneous PO and material differences with six 
     assert.ok((row[0].match(/ops-difference/g)||[]).length>=4)
   }
   assertEnglish(html)
+})
+
+test('exception scopes keep completed and cancelled history accessible and export only the selected scope',async()=>{
+  i18n.setLanguage('en')
+  const orders=[{...reconciliation.workspaceOrders()[0],id:'current',imported:true},
+    {...reconciliation.workspaceOrders()[0],id:'completed',imported:true,sourceRemaining:0,sourceReported:48},
+    {...reconciliation.workspaceOrders()[0],id:'cancelled',imported:true,cancelled:true}]
+  const issues=orders.map(o=>({id:'case-'+o.id,order:o.id,kind:'po',title:'PO mismatch',status:'待处理'}))
+  let downloaded;exceptionDownload=(...args)=>downloaded=args
+  const Ops=component('Operations.vue','caseScope,caseScopeTabs,tasks,exportExceptionView')
+  const View={...Ops,setup(props,ctx){return Ops.setup(props,{...ctx,expose(s){
+    assert.deepEqual(s.tasks.value.map(c=>c.order),['current'])
+    assert.deepEqual(s.caseScopeTabs.value.map(t=>t.count),[1,2,3])
+    s.caseScope.value='history';assert.deepEqual(s.tasks.value.map(c=>c.order),['completed','cancelled'])
+    s.exportExceptionView();assert.deepEqual(downloaded[0].map(c=>c.order),['completed','cancelled'])
+    s.caseScope.value='all';assert.equal(s.tasks.value.length,3)
+    assert.equal(props.issues.length,3);assert.equal(props.orders.length,3)
+  }})}}
+  const html=await renderToString(Vue.createSSRApp(View,{view:'exceptions',orders,issues,shipments:[],role:'buyer'}))
+  assert.match(html,/Current tasks/);assert.match(html,/Historical records/);assert.match(html,/All records/)
+  assertEnglish(html)
+})
+
+test('unlinked supplement records remain visible in the web exceptions and data pages without becoming orders',async()=>{
+  i18n.setLanguage('en')
+  const issue={id:'IMPORT-missing',order:'SOURCE-weekly1',kind:'source_link',status:'待处理',title:{en:'Supplement row requires linking',zh:'补充表记录待关联'},detail:'weekly.xlsx / Sheet1 / 2',owner:'Leo',
+    sourceRecord:{po:'4900000999',part:'UNLINKED-PART',importEvidence:[{file:'weekly.xlsx',sheet:'Sheet1',row:2}]}}
+  const result=await render({page:'exceptions',orders:[],shipments:[],issues:[issue],checks:[]})
+  assert.match(result.html,/4900000999/);assert.match(result.html,/UNLINKED-PART/)
+  const Ops=component('Operations.vue','query,tasks,exportExceptionView')
+  let downloaded;exceptionDownload=(...args)=>downloaded=args
+  const View={...Ops,setup(props,ctx){return Ops.setup(props,{...ctx,expose(s){s.query.value='UNLINKED-PART';assert.equal(s.tasks.value.length,1);s.exportExceptionView()}})}}
+  const html=await renderToString(Vue.createSSRApp(View,{view:'data',orders:[],issues:[issue],shipments:[],role:'buyer'}))
+  assert.match(html,/4900000999/);assert.equal(downloaded[0][0].id,issue.id);assertEnglish(html)
 })
 
 test('header dropdown search and checklists combine across columns and constrain exported results',async()=>{
@@ -401,6 +435,22 @@ test('cloud deletion saves a tombstone and advances revision after acknowledgeme
   assert.equal(s.cloudRevision.value,1)
   assert.ok(saved.shipments[2].deletedAt);assert.equal(saved.orders[0].reported,0)
   assert.equal(s.cloudBusy.value,false)
+})
+
+test('SAP facts received during a collaboration save are applied even when its revision is unchanged',async()=>{
+  cloudFactory=async(email,password,receive)=>{
+    receive({state:{orders:reconciliation.workspaceOrders(),shipments:reconciliation.workspaceShipments(),issues:[],checks:[]},revision:0,generation:'same-version',email})
+    return {save:async state=>{
+      const updated=persistence.copy(state);updated.orders[0].sapPart='NEW-SAP-MATERIAL'
+      receive({state:updated,revision:1,generation:'same-version',email})
+      return {revision:1,at:1}
+    },disconnect:async()=>{}}
+  }
+  const {state:s}=await render();await s.loginCloud({email:'pilot@example.test',password:'test'})
+  await s.removeShipment(s.shipments.value[2],'Duplicate registration')
+  assert.equal(s.orders.value[0].sapPart,'NEW-SAP-MATERIAL')
+  assert.ok(s.shipments.value[2].deletedAt)
+  assert.ok(s.checks.value.some(c=>c.kind==='material'&&c.order===s.orders.value[0].id))
 })
 
 test('imported orders paginate and keep unknown receipt facts out of completed status',async()=>{

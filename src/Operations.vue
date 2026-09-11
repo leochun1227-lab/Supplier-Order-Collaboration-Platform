@@ -3,11 +3,11 @@ import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Button, Badge } from 'frappe-ui'
 import { ArrowUpRight, ArrowRight, Search, RefreshCw, Plus, Ship, Plane, CircleAlert, CheckCheck, Download, Filter, X } from 'lucide-vue-next'
 import { t as tr, dateLabel, language } from './i18n.mjs'
-import { normalizedIdentity } from './sap-reference.mjs'
+import { normalizedIdentity, sapLineMatches } from './sap-reference.mjs'
 import { downloadExceptions } from './exception-export.mjs'
 import { TODAY, openQty } from './domain.mjs'
 import { money, percent } from './analytics.mjs'
-import { KINDS, label, workbookIdentity, businessSummary, reportedQty, remainingQty, groupLabel, groupedQuantity, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
+import { KINDS, label, workbookIdentity, isHistoricalOrder, businessSummary, reportedQty, remainingQty, groupLabel, groupedQuantity, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
 const props=defineProps({view:String,orders:Array,shipments:Array,issues:Array,role:String,selection:Object,synced:Boolean})
 const emit=defineEmits(['open-order','review','dispatch','sync','inspect','navigate','reset','clear-selection','shipment'])
 const l=(zh,en)=>tr(label(zh,en))
@@ -15,7 +15,11 @@ const query=ref(''),owner=ref(''),source=ref(''),purpose=ref(''),shipping=ref(''
 watch(()=>props.view,()=>{query.value='';kind.value='';caseStatus.value='active'})
 watch(()=>props.role,()=>{owner.value='';supplier.value=''})
 const imported=computed(()=>props.orders.some(o=>o.imported))
-const pageNumber=ref(1),pageSize=ref(40)
+const pageNumber=ref(1),pageSize=ref(40),caseScope=ref('current')
+function scopeCase(c,scope=caseScope.value){const historical=isHistoricalOrder(order(c.order));return scope==='all'||(scope==='history'?historical:!historical)}
+const scopedCases=computed(()=>props.issues.filter(c=>(props.view!=='data'||c.rule||c.sourceRecord)&&scopeCase(c)))
+const caseScopeTabs=computed(()=>[['current',l('当前待办','Current tasks')],['history',l('历史记录','Historical records')],['all',l('全部记录','All records')]].map(([key,title])=>({key,title,count:props.issues.filter(c=>(props.view!=='data'||c.rule||c.sourceRecord)&&c.status!=='已解决'&&scopeCase(c,key)).length})))
+const sapReferenceDate=computed(()=>[...new Set(props.orders.map(o=>o.sapAsOf).filter(Boolean))].sort().at(-1)||'—')
 function clearOrderFilters(){query.value='';owner.value='';source.value='';purpose.value='';shipping.value='';supplier.value='';pageNumber.value=1}
 function selectStatus(value){clearOrderFilters();status.value=value;emit('clear-selection')}
 watch(()=>props.selection,value=>{if(value){clearOrderFilters();status.value='all'}},{immediate:true})
@@ -23,16 +27,15 @@ watch([query,owner,source,purpose,shipping,status,kind,caseStatus,supplier,pageS
 const scope=computed(()=>props.orders.filter(o=>(!supplier.value||o.supplier===supplier.value)&&(!purpose.value||o.type===purpose.value)))
 const summary=computed(()=>businessSummary(scope.value,props.shipments,props.issues))
 const active=computed(()=>props.issues.filter(i=>i.status!=='已解决'))
-const checks=computed(()=>props.issues.filter(i=>i.rule))
 const problemOrders=computed(()=>new Set(active.value.map(c=>c.order)))
 function matchesStatus(o,value){return value==='all'||value==='cancelled'&&o.cancelled||value==='open'&&openQty(o)>0||value==='completed'&&!o.cancelled&&o.qtyKnown!==false&&openQty(o)===0||value==='checks'&&problemOrders.value.has(o.id)}
 const orderViews=computed(()=>[['all','全部记录','All records'],['open','未完成','Open'],['completed',imported.value?'台账已完成':'已收货',imported.value?'Ledger completed':'Received'],['cancelled','已取消','Cancelled'],['checks','有待处理','Needs action']].map(([key,zh,en])=>({key,title:l(zh,en),records:props.orders.filter(o=>matchesStatus(o,key))})))
 const rows=computed(()=>scope.value.filter(o=>(!props.selection||props.selection.ids.includes(o.id))&&(!owner.value||o.buyer===owner.value)&&(!source.value||o.sourceType===source.value)&&(!shipping.value||o.mode===shipping.value)&&`${o.po} ${o.part} ${o.so||''} ${o.en} ${o.name}`.toLowerCase().includes(query.value.toLowerCase())&&matchesStatus(o,status.value)))
 function taskSearch(c) {
-  const o=props.orders.find(o=>o.id===c.order)||{}, current=workbookIdentity(o)
+  const o=order(c.order)||{}, current=workbookIdentity(o)
   return [c.id,tr(c.title),tr(c.detail),current.po,current.item,o.sapPo,o.sapItem,o.part,o.sapPart].join(' ').toLowerCase()
 }
-const baseTasks=computed(()=>props.issues.filter(c=>(props.view!=='data'||c.rule)&&(!kind.value||c.kind===kind.value)&&(!owner.value||c.owner===owner.value)&&(caseStatus.value==='all'||caseStatus.value==='active'&&c.status!=='已解决'||caseStatus.value==='closed'&&c.status==='已解决')&&taskSearch(c).includes(query.value.toLowerCase())))
+const baseTasks=computed(()=>scopedCases.value.filter(c=>(props.view!=='data'||c.rule||c.sourceRecord)&&(!kind.value||c.kind===kind.value)&&(!owner.value||c.owner===owner.value)&&(caseStatus.value==='all'||caseStatus.value==='active'&&c.status!=='已解决'||caseStatus.value==='closed'&&c.status==='已解决')&&taskSearch(c).includes(query.value.toLowerCase())))
 const caseFilters=ref({}), caseFilterKey=ref(''), caseFilterDraft=ref({query:'',values:null})
 const caseFilterPanel=ref(null),caseFilterInput=ref(null),caseFilterStyle=ref({})
 let caseFilterAnchor=null
@@ -83,12 +86,12 @@ function resetCaseFilters(){caseFilters.value={};pageNumber.value=1;closeCaseFil
 function outsideCaseFilter(e){if(caseFilterKey.value&&!caseFilterPanel.value?.contains(e.target)&&!caseFilterAnchor?.contains(e.target))closeCaseFilter()}
 function keyCaseFilter(e){if(caseFilterKey.value&&e.key==='Escape'){e.preventDefault();closeCaseFilter(true)}}
 function moveCaseFilter(e){if(caseFilterKey.value&&!caseFilterPanel.value?.contains(e.target))closeCaseFilter()}
-watch([()=>props.view,language,()=>props.role],resetCaseFilters)
+watch([()=>props.view,language,()=>props.role,caseScope],resetCaseFilters)
 watch([query,owner,kind,caseStatus],()=>closeCaseFilter())
 onMounted(()=>{document.addEventListener('pointerdown',outsideCaseFilter);document.addEventListener('focusin',outsideCaseFilter);document.addEventListener('keydown',keyCaseFilter);window.addEventListener('resize',moveCaseFilter);window.addEventListener('scroll',moveCaseFilter,true)})
 onBeforeUnmount(()=>{document.removeEventListener('pointerdown',outsideCaseFilter);document.removeEventListener('focusin',outsideCaseFilter);document.removeEventListener('keydown',keyCaseFilter);window.removeEventListener('resize',moveCaseFilter);window.removeEventListener('scroll',moveCaseFilter,true)})
 function poDiff(o){return !!o?.sapPo&&normalizedIdentity(o.sapPo)!==normalizedIdentity(workbookIdentity(o).po)}
-function lineDiff(o){return !!o?.sapItem&&normalizedIdentity(o.sapItem)!==normalizedIdentity(workbookIdentity(o).item)}
+function lineDiff(o){return !!o?.sapItem&&!sapLineMatches(o)}
 function materialDiff(o){return !!o?.sapPart&&String(o.sapPart).trim()!==String(o.soPart??o.part??'').trim()}
 const transport=computed(()=>imported.value?['海运','空运','快递'].map(mode=>{const os=summary.value.open.filter(o=>o.mode===mode);return {mode,rows:os.map(order=>({order})),count:os.length,value:null,groups:groupedQuantity(os,remainingQty)}}):['海运','空运','快递'].map(mode=>{const rs=summary.value.transitRows.filter(r=>r.shipment.mode===mode);return{mode,rows:rs,count:new Set(rs.map(r=>r.shipment.id)).size,value:rs.filter(r=>priceReady(r.order)).reduce((n,r)=>n+r.qty*r.order.unitPrice/(r.order.priceUnit||1),0),groups:rs.reduce((n,r)=>{n[r.order.unit]=(n[r.order.unit]||0)+r.qty;return n},{})}}))
 const age=computed(()=>[[0,15],[16,30],[31,60],[61,90],[91,Infinity]].map(([min,max])=>({label:max===Infinity?'>90':`${min}–${max}`,rows:summary.value.open.filter(o=>{const d=(Date.parse(TODAY)-Date.parse(o.created))/86400000;return d>=min&&d<=max})})))
@@ -100,8 +103,8 @@ function goToPage(value){pageNumber.value=Math.max(1,Math.min(maxPage.value,Math
 const pagedRows=computed(()=>rows.value.slice((pageNumber.value-1)*pageSize.value,pageNumber.value*pageSize.value))
 const pagedTasks=computed(()=>tasks.value.slice((pageNumber.value-1)*pageSize.value,pageNumber.value*pageSize.value))
 const pagedShipments=computed(()=>shipmentRows.value.slice((pageNumber.value-1)*pageSize.value,pageNumber.value*pageSize.value))
-function order(id){return props.orders.find(o=>o.id===id)}
-function open(id,tab='overview'){const o=order(id);if(o)emit('open-order',o,tab)}
+function order(id){return props.orders.find(o=>o.id===id)||props.issues.find(c=>c.order===id)?.sourceRecord}
+function open(id,tab='overview'){const o=props.orders.find(o=>o.id===id);if(o)emit('open-order',o,tab);else{const issue=props.issues.find(c=>c.order===id);if(issue)emit('review',issue)}}
 function inspect(records,title){emit('inspect',{ids:[...new Set(records.map(o=>o.id))],label:title})}
 function relatedCases(o){return active.value.filter(i=>i.order===o.id)}
 function fulfillment(o){if(o.cancelled)return l('已取消','Cancelled');if(o.imported)return remainingQty(o)>0?(reportedQty(o)>0?tr('部分发运'):l('待发运','To dispatch')):l('台账已报发','Ledger: dispatched');return o.received>=o.qty?tr('已收货'):reportedQty(o)>0?reportedQty(o)<o.qty?tr('部分发运'):l('已报发','Reported dispatched'):tr(o.status)}
@@ -157,9 +160,10 @@ function exportExceptionView(){
   </template>
 
   <template v-else-if="view==='data'||view==='exceptions'">
-    <p v-if="imported" class="ops-note">{{l('当前按已导入的 SAP 参考数据核对；后续 SAP 原始快照尚未自动接入此清单。导出中的 SAP 数据时间表示参考数据日期。','Checks use imported SAP reference data. Later raw SAP snapshots are not yet applied to this list. SAP data dates in exports refer to the reference data.')}}</p>
+    <p v-if="imported" class="ops-note">{{l('SAP 参考日期','SAP reference date')}}: {{sapReferenceDate}} · {{l('按已加载的 SAP PO 核对；唯一的 PO、料号、数量匹配可识别顺序行号。历史记录可单独查看。','Checks use loaded SAP POs; a unique PO, material and quantity match can identify sequential line numbers. Historical records are available separately.')}}<span v-if="orders.some(o=>o.sapReferenceRefreshError)"> {{l('SAP 核对更新未完成，暂保留上次参考数据。','SAP comparison update incomplete; retaining previous reference data.')}}</span></p>
+    <div class="ops-tabs ops-exception-scopes" :aria-label="l('异常记录范围','Exception record scope')"><button v-for="tab in caseScopeTabs" :key="tab.key" :class="{active:caseScope===tab.key}" :aria-pressed="caseScope===tab.key" @click="caseScope=tab.key">{{tab.title}} <b>{{tab.count}}</b></button></div>
     <div v-if="view==='data'&&!imported" class="ops-sync"><div><b>{{l('SAP 与平台核对','SAP / platform reconciliation')}}</b><small>{{l('模拟 SAP 快照','Simulated SAP snapshot')}} · {{synced?'09/08 10:00':'09/08 09:00'}} · {{l('初始化来源截至','Initial source as of')}} 09/04</small></div><Button variant="outline" :disabled="synced" @click="emit('sync')"><RefreshCw :size="15"/>{{l(synced?'示例快照已应用':'模拟接收后续 SAP 快照',synced?'Demo snapshot applied':'Simulate later SAP snapshot')}}</Button></div>
-    <div class="ops-check-metrics"><div><small>{{l('未关闭事项','Open tasks')}}</small><strong>{{(view==='data'?checks:issues).filter(i=>i.status!=='已解决').length}}</strong></div><div><small>{{l('涉及订单行 · 去重','Affected lines · unique')}}</small><strong>{{new Set((view==='data'?checks:issues).filter(i=>i.status!=='已解决').map(c=>c.order)).size}}</strong></div><div><small>{{l('已通过核对／已解决','Passed / resolved')}}</small><strong>{{(view==='data'?checks:issues).filter(i=>i.status==='已解决').length}}</strong></div><div><small>{{l('处理方式','Processing')}}</small><b>{{l('规则核对 + 人员确认','Rules + human review')}}</b></div></div>
+    <div class="ops-check-metrics"><div><small>{{l('未关闭事项','Open tasks')}}</small><strong>{{scopedCases.filter(i=>i.status!=='已解决').length}}</strong></div><div><small>{{l('涉及订单行 · 去重','Affected lines · unique')}}</small><strong>{{new Set(scopedCases.filter(i=>i.status!=='已解决').map(c=>c.order)).size}}</strong></div><div><small>{{l('已通过核对／已解决','Passed / resolved')}}</small><strong>{{scopedCases.filter(i=>i.status==='已解决').length}}</strong></div><div><small>{{l('处理方式','Processing')}}</small><b>{{l('规则核对 + 人员确认','Rules + human review')}}</b></div></div>
     <div class="ops-filters ops-filter-panel"><label class="ops-search"><Search :size="16"/><input v-model="query" :placeholder="l('搜索任务、双方 PO 或料号','Search task, either PO or material')"/></label><select v-model="kind" :aria-label="l('问题类型','Issue type')"><option value="">{{l('全部问题类型','All issue types')}}</option><option v-for="(title,key) in KINDS" :key="key" :value="key">{{tr(title)}}</option></select><select v-model="owner" :aria-label="l('任务责任人','Task owner')"><option value="">{{l('全部责任人','All owners')}}</option><option v-for="b in [...new Set(issues.map(i=>i.owner))]" :key="b">{{b}}</option></select><select v-model="caseStatus" :aria-label="l('任务状态','Task status')"><option value="active">{{l('未关闭','Open')}}</option><option value="closed">{{l('已解决','Resolved')}}</option><option value="all">{{l('全部状态','All states')}}</option></select><Button variant="outline" :disabled="!tasks.length" @click="exportExceptionView" :title="l('导出当前筛选的全部异常，不受分页影响','Export all matching issues across every page')"><Download :size="15"/>{{l('导出异常 Excel','Export exceptions to Excel')}}</Button><small>{{tasks.length}} {{l('条异常','issues')}}</small></div>
     <p v-if="exceptionExportNotice" class="ops-note" role="status">{{exceptionExportNotice}}</p><p v-if="exceptionExportError" class="ops-error" role="alert">{{exceptionExportError}}</p>
     <div v-if="Object.keys(caseFilters).length" class="ops-case-filter-summary"><span>{{l('已筛选','Filtered columns')}}: {{Object.keys(caseFilters).map(key=>caseColumns.find(c=>c[0]===key)?.[1]).join(' · ')}}</span><button @click="resetCaseFilters">{{l('清除表头筛选','Clear column filters')}}</button></div>
@@ -167,7 +171,7 @@ function exportExceptionView(){
       <thead><tr><th v-for="[key,title] in caseColumns" :key="key"><div class="ops-case-heading"><span>{{title}}</span><button class="ops-case-filter-trigger" :class="{active:caseFilters[key]}" :aria-label="l('筛选：','Filter: ')+title" :title="l('筛选：','Filter: ')+title" aria-haspopup="dialog" :aria-expanded="caseFilterKey===key" aria-controls="exception-column-filter" @click="openCaseFilter(key,$event)"><Filter :size="13"/><span>Filter</span></button></div></th></tr></thead>
       <tbody><tr v-for="c in pagedTasks" :key="c.id">
         <td><b>{{tr(c.title)}}</b><small>{{c.userEntered?c.detail:tr(c.detail)}}</small><small v-if="c.note">{{c.noteUserEntered||c.rule?c.note:tr(c.note)}}</small></td>
-        <td class="ops-case-originals"><div :class="{'ops-difference':poDiff(order(c.order))}"><span>Excel PO</span><button class="ops-link" @click="open(c.order,view==='data'?'overview':'activity')">{{workbookIdentity(order(c.order)||{}).po||'—'}}</button></div><div :class="{'ops-difference':poDiff(order(c.order))}"><span>SAP PO</span><b>{{order(c.order)?.sapPo||'—'}}</b></div><small :class="{'ops-difference':lineDiff(order(c.order))}">{{l('Excel 行号','Excel line')}}: {{workbookIdentity(order(c.order)||{}).item||'—'}} / {{l('SAP 行号','SAP line')}}: {{order(c.order)?.sapItem||'—'}}</small></td>
+        <td class="ops-case-originals"><div :class="{'ops-difference':poDiff(order(c.order))}"><span>Excel PO</span><button class="ops-link" @click="open(c.order,view==='data'?'overview':'activity')">{{workbookIdentity(order(c.order)||{}).po||'—'}}</button></div><div :class="{'ops-difference':poDiff(order(c.order))}"><span>SAP PO</span><b>{{order(c.order)?.sapPo||'—'}}</b></div><small :class="{'ops-difference':lineDiff(order(c.order))}">{{l('Excel 行号','Excel line')}}: {{workbookIdentity(order(c.order)||{}).item||'—'}} / {{l('SAP 行号','SAP line')}}: {{order(c.order)?.sapItem||'—'}}</small><small v-if="order(c.order)?.sapLineConvention==='sequence'&&!lineDiff(order(c.order))" class="ops-green">{{l('顺序号已对应 SAP 行号','Sequence linked to SAP line')}}</small><small v-if="order(c.order)?.sapLinkMethod==='po_material_quantity'">{{l('依据：PO＋料号＋数量唯一匹配','Basis: unique PO + material + quantity')}}</small></td>
         <td class="ops-case-originals"><div :class="{'ops-difference':materialDiff(order(c.order))}"><span>Excel</span><b>{{(order(c.order)?.soPart??order(c.order)?.part)||'—'}}</b></div><div :class="{'ops-difference':materialDiff(order(c.order))}"><span>SAP</span><b>{{order(c.order)?.sapPart||'—'}}</b></div></td>
         <td>{{c.owner}}<small :class="{'ops-amber':c.due<TODAY&&c.status!=='已解决'}">{{c.due}}</small></td>
         <td><Badge :theme="c.status==='已解决'?'green':c.priority==='高'?'orange':'gray'">{{tr(c.status)}}</Badge></td>

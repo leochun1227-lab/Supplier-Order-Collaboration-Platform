@@ -18,11 +18,11 @@ export function exceptionExportRows(tasks, orders, {language='zh', exportedAt=ne
   const tr=value=>translate(value,language), byId=new Map(orders.map(order=>[order.id,order]))
   const text=(value,userEntered=false)=>userEntered&&typeof value==='string'?value:tr(value??'')
   return [columns.map(col=>col[language==='en'?1:0]), ...tasks.map(task=>{
-    const order=byId.get(task.order)||{}
+    const order=byId.get(task.order)||task.sourceRecord||{}
     return [task.id, tr(KINDS[task.kind]||task.category||''), text(task.title,task.userEntered),
       text(task.detail,task.userEntered), tr(task.priority||''), tr(task.status||''),
       workbookIdentity(order).po,workbookIdentity(order).item,order.sapPo??'',order.sapItem??'',order.so??'',order.sapPart??'',order.soPart??order.part??'',
-      order.unit??'',order.soUnit??'',task.owner??'',task.due??'',
+      order.sapUnit??order.unit??'',order.soUnit??'',task.owner??'',task.due??'',
       text(task.note,task.noteUserEntered||task.rule),tr(task.closure||''),
       (order.importEvidence||[]).map(e=>[e.file,e.sheet,e.row].filter(v=>v!=null&&v!=='').join(' / ')).join('\n'),
       order.sapAsOf??'',exportedAt]

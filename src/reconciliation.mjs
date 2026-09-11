@@ -1,12 +1,16 @@
 import { TODAY, seedOrders, seedShipments, daysLate, openQty } from './domain.mjs'
-import { identityValue, normalizedIdentity, workbookIdentity } from './sap-reference.mjs'
+import { identityValue, normalizedIdentity, workbookIdentity, sapLineMatches } from './sap-reference.mjs'
 export { workbookIdentity } from './sap-reference.mjs'
 export const label=(zh,en)=>({zh,en})
+export const isHistoricalOrder=o=>!!o?.imported&&(!!o.cancelled||o.qtyKnown!==false&&openQty(o)<=0)
 export const KINDS={
   po:label('SAP 与总表 PO 不一致','SAP / workbook PO mismatch'),
   po_line:label('SAP 与总表订单行不一致','SAP / workbook line mismatch'),
   po_line_missing:label('总表订单行缺失','Workbook order line missing'),
   sap_reference:label('SAP 参考记录待关联','SAP reference requires linking'),
+  shared_reference:label('多条总表记录共用 SAP 行','Multiple workbook records share a SAP line'),
+  source_link:label('补充表记录待关联','Supplement row requires linking'),
+  unit:label('SAP 计量单位变化待核对','SAP unit change requires review'),
   initialization:label('初始化记录待核对','Initialization review'),
   shipment:label('报发与 SAP 待核对','Reported shipment / SAP'),
   material:label('物料与单位待确认','Material / unit mapping'),
@@ -66,7 +70,7 @@ export function factsFor(o,shipments){
       {field:label('采购订单行','Purchase order line'),sap:o.sapItem||'—',business:workbookIdentity(o).item||'—',source:label('Excel 总表','Excel workbook'),adopted:label('双方原值保留','Both originals retained')},
     ]:[]),
     {field:label('物料编码','Material'),sap:o.sapPart||'—',business:o.soPart??o.part??'—',source:label('工厂 SO／平台','Factory SO / platform'),adopted:mappingReady(o)?label('对应关系已确认','Mapping confirmed'):label('双方原值保留','Both originals retained')},
-    {field:label('计量单位','Unit'),sap:o.unit||'EA',business:o.soUnit||o.unit||'EA',source:label('工厂 SO','Factory SO'),adopted:o.mapping?`1 ${o.soUnit} = ${o.mapping.factor} ${o.unit}`:label('按原单位展示','Shown in original units')},
+    {field:label('计量单位','Unit'),sap:o.sapUnit??o.unit??'EA',business:o.soUnit||o.unit||'EA',source:label('工厂 SO','Factory SO'),adopted:o.mapping?`1 ${o.soUnit} = ${o.mapping.factor} ${o.unit}`:label('按原单位展示','Shown in original units')},
     {field:label('发运数量','Dispatched quantity'),sap:`${o.shipped??'—'} ${o.unit||'EA'}`,business:`${reportedQty(o)} ${o.unit||'EA'}`,source:o.cooperationSource||label('平台','Platform'),adopted:label('分别保留报发与过账','Report and PGI kept separately')},
     {field:label('PO 单价','PO unit price'),sap:`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit||'EA'}`,business:'—',source:'SAP PO',adopted:priceReady(o)?label('纳入已确认货值','Included in confirmed value'):label('暂不计入货值','Excluded from confirmed value')},
     {field:label('SAP 交货单','SAP delivery'),sap:related.map(s=>s.sapDelivery||'—').join(' / ')||'—',business:related.map(s=>s.id).join(' / ')||'—',source:label('装运批次','Shipment batch'),adopted:label('按批次关联','Linked by batch')},
@@ -80,6 +84,7 @@ export function detectChecks(orders,shipments,today=TODAY){
       const business=workbookIdentity(o)
       if(identityValue(o.sapPo)&&identityValue(o.sapItem)) {
         for(const [kind,key,sap]of [['po','po',o.sapPo],['po_line','item',o.sapItem]]) {
+          if(kind==='po_line'&&sapLineMatches(o))continue
           if(kind==='po_line'&&!identityValue(business.item)) {
             add(o,'po_line_missing',label(`总表 Line No 未填写（原值：${business.item||'空白'}）；SAP 订单行：${sap}。这不是 PO 或料号不一致。`,`Workbook Line No is missing (original: ${business.item||'blank'}); SAP order line: ${sap}. This is not a PO or material mismatch.`))
             continue
@@ -91,12 +96,18 @@ export function detectChecks(orders,shipments,today=TODAY){
         add(o,'sap_reference',label(
           `${unavailable?'SAP 参考数据未能读取，请刷新重试':'当前导入参考中未建立唯一 SAP 关联，需核实来源'}；Excel PO: ${business.po||'—'} / 行: ${business.item||'—'}`,
           `${unavailable?'SAP reference unavailable; reload to retry':'No unique SAP link in the imported reference; verify the source'}; Excel PO: ${business.po||'—'} / line: ${business.item||'—'}`))
+        const reasons={po_missing:label('总表缺少正式 PO','Workbook has no formal PO'),po_not_in_scope:label('当前 SAP 查询范围内未找到 PO','PO not found in the current SAP scope'),material_missing:label('总表料号缺失，不能据此关联','Workbook material is missing; cannot infer a link'),ambiguous:label('同 PO、料号、数量有多个候选行','Multiple rows share this PO, material and quantity'),material_not_in_po:label('PO 存在，但该料号未找到','PO exists; material not found'),line_or_quantity:label('订单行或数量需核对','Order line or quantity needs review'),snapshot_line_missing:label('原 SAP 关联行不在当前快照内','Original SAP anchor is absent from this snapshot')}
+        if(reasons[o.sapReferenceReason])found.at(-1).detail=label(`${reasons[o.sapReferenceReason].zh}；Excel PO: ${business.po||'—'} / 行: ${business.item||'—'}`,`${reasons[o.sapReferenceReason].en}; Excel PO: ${business.po||'—'} / line: ${business.item||'—'}`)
+        found.at(-1).fingerprint=JSON.stringify(['sap_reference',found.at(-1).detail])
       }
       if((o.workbookMaterialChanged||o.sapPart&&o.sapPart!==o.soPart)&&!mappingReady(o))add(o,'material',`${o.sapPart||'—'} / ${o.unit} ↔ ${o.soPart||'—'} / ${o.soUnit}`)
+      if(o.sapSharedLineCount>1)add(o,'shared_reference',label(`${o.sapSharedLineCount} 条总表记录关联 SAP ${o.sapPo} / ${o.sapItem}；可能是拆分发运，不自动汇总订购数量。`,`${o.sapSharedLineCount} workbook records link to SAP ${o.sapPo} / ${o.sapItem}; may be split dispatches. Ordered quantities are not automatically summed.`))
+      if(o.sapUnit&&o.unit&&o.unit!=='?'&&o.sapUnit!==o.unit)add(o,'unit',`SAP: ${o.sapUnit} ↔ Excel: ${o.unit}`)
+      if(o.sapSharedLineCount===1&&o.qtyKnown!==false&&Number.isFinite(o.sapQuantity)&&Number.isFinite(o.qty)&&o.sapUnit&&o.sapUnit===o.unit&&o.unit!=='?'&&o.sapPart===o.soPart&&o.sapQuantity!==o.qty)add(o,'quantity',`SAP: ${o.sapQuantity} ${o.sapUnit} ↔ Excel: ${o.qty} ${o.unit}`)
       if(openQty(o)<=0)continue
-      // These two facts now have live rules; stale import warnings must not remain
+      // These facts now have live rules; stale import warnings must not remain
       // open after the workbook is corrected or its material mapping is confirmed.
-      const initialChecks=o.importChecks?.filter(c=>!['sap_link','material'].includes(c.kind))||[]
+      const initialChecks=o.importChecks?.filter(c=>!['sap_link','material','price'].includes(c.kind))||[]
       if(initialChecks.length)add(o,'initialization',initialChecks.map(c=>`${c.title.zh} / ${c.title.en}`).join('; '))
       if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit}`)
       if(remainingQty(o)>0&&(!o.promisedEtd||o.promisedEtd<today||o.dispatchDelayStatus==='delayed'))add(o,'delivery',`${o.promisedEtd||'TBD'}; ${remainingQty(o)} ${o.unit}; ${o.dispatchDelayReason||''}`,'高')

@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { loadSapReferences, sapReferenceFields } from '../src/sap-reference.mjs'
+import { loadSapReferences, sapReferenceFields, applySapSnapshotReferences, refreshSapSnapshot, sapLineMatches } from '../src/sap-reference.mjs'
 import { detectChecks, reconcile, resolveFact, updateCase, factsFor } from '../src/reconciliation.mjs'
 import { sharedWorkbookState } from '../src/parts-workbook-link.mjs'
 import { hydrateState, projectState } from '../src/persistence.mjs'
 import { connectPublicWorkspace } from '../src/public-firebase-store.mjs'
 import { exceptionExportRows } from '../src/exception-export.mjs'
+import { createSapAnchorStore } from '../src/sap-anchor-store.mjs'
 
 const id='excel-1234567890abcdef12345678'
 const order=()=>({id:'row1',imported:true,po:'4900000001',item:'00010',
@@ -14,6 +15,139 @@ const order=()=>({id:'row1',imported:true,po:'4900000001',item:'00010',
   importFields:{po:4900000001,line:10},importEvidence:[{file:'test.xlsx',sheet:'Sheet1',row:4}]})
 const source=()=>({orders:[order()],shipments:[],issues:[]})
 const referenceKinds=rows=>detectChecks(rows,[]).filter(c=>['po','po_line','po_line_missing','sap_reference'].includes(c.kind))
+
+const unlinked=()=>({...order(),sapPo:'',sapItem:'',sapReferenceStatus:'unmatched',qty:5,part:'MAT1',importFields:{po:'4900000001',line:1,material:'MAT1',qty:5}})
+const sapRow=(line='00010',extra={})=>({EBELN:'4900000001',EBELP:line,MATNR:'MAT1',MENGE:5,MEINS:'EA',NETPR:12,PEINH:1,WAERS:'AUD',...extra})
+const apply=(o,rows=[sapRow()])=>{applySapSnapshotReferences({orders:[o]},rows,1789104255050);return o}
+
+test('unique PO, material and quantity links sequential Excel numbering without rewriting source values',()=>{
+  const o=apply(unlinked())
+  assert.equal(o.sapItem,'00010');assert.equal(o.importFields.line,1)
+  assert.equal(o.sapLinkMethod,'po_material_quantity');assert.equal(o.sapLineConvention,'sequence')
+  assert.equal(sapLineMatches(o),true);assert.deepEqual(referenceKinds([o]),[])
+  assert.equal(o.quantityComparable,false,'identity association does not authorize quantity conversion')
+  for(const patch of [{po:'4900000002'},{line:2},{qty:6},{material:'OTHER'}]){
+    const edited=structuredClone(o);Object.assign(edited.importFields,patch)
+    if(patch.qty)edited.qty=patch.qty
+    if(patch.material)edited.soPart=patch.material
+    assert.equal(sapLineMatches(edited),!patch.line,'only a changed line invalidates an established numbering convention')
+  }
+})
+
+test('exact SAP line takes precedence; ambiguous matches stay unlinked; real numbering differences stay visible',()=>{
+  const direct=apply(unlinked(),[sapRow('00001',{MATNR:'OTHER'}),sapRow()])
+  assert.equal(direct.sapItem,'00001');assert.equal(direct.sapPart,'OTHER');assert.equal(direct.sapLineConvention,'sap')
+  assert.ok(detectChecks([direct],[]).some(c=>c.kind==='material'))
+  const ambiguous=apply(unlinked(),[sapRow(),sapRow('00020')])
+  assert.equal(ambiguous.sapReferenceStatus,'unmatched');assert.equal(ambiguous.sapReferenceReason,'ambiguous')
+  assert.equal(ambiguous.sapItem,'')
+  const mismatch=apply(unlinked(),[sapRow('00030')])
+  assert.equal(mismatch.sapReferenceStatus,'matched');assert.equal(mismatch.sapLineConvention,'sap')
+  assert.deepEqual(referenceKinds([mismatch]).map(c=>c.kind),['po_line'])
+})
+
+test('snapshot refresh preserves the proven SAP anchor, collaboration and genuine changed SAP material',()=>{
+  const o=apply(unlinked());o.eta='2026-10-01';o.comments=[{text:'Keep me'}]
+  apply(o,[sapRow('00010',{MATNR:'NEW'}),sapRow('00020')])
+  assert.equal(o.sapItem,'00010');assert.equal(o.sapPart,'NEW');assert.equal(o.eta,'2026-10-01')
+  assert.equal(sapLineMatches(o),true,'a SAP material change must not invent a line mismatch')
+  assert.deepEqual(o.comments,[{text:'Keep me'}]);assert.ok(detectChecks([o],[]).some(c=>c.kind==='material'))
+  apply(o,[sapRow('00020')])
+  assert.equal(o.sapReferenceReason,'snapshot_line_missing');assert.equal(o.sapItem,'')
+  apply(o,[sapRow()]);assert.equal(o.sapItem,'00010')
+})
+
+test('latest snapshot validates complete count, hash and unique rows atomically; unchanged pointers avoid table downloads',async()=>{
+  const pointer={run:'1789104243174-a81c04a60c154b3b9f60bd5e139628d4',finishedAt:1789104255050,counts:{po:1},hash:'test-hash'}
+  let records={a:sapRow()},hash=pointer.hash,reads=[]
+  const fetcher=async(url,options)=>{assert.equal(options.method,undefined);reads.push(url);return Response.json(url.endsWith('/current.json')?pointer:url.endsWith('/hash.json')?hash:records)}
+  const data={orders:[unlinked()]},before=structuredClone(data)
+  hash='wrong';await assert.rejects(refreshSapSnapshot(data,{fetcher}),/incomplete/);assert.deepEqual(data,before)
+  hash=pointer.hash;records={};await assert.rejects(refreshSapSnapshot(data,{fetcher}),/incomplete/);assert.deepEqual(data,before)
+  records={a:sapRow(),b:sapRow()};pointer.counts.po=2
+  await assert.rejects(refreshSapSnapshot(data,{fetcher}),/duplicate/);assert.deepEqual(data,before)
+  records={a:sapRow()};pointer.counts.po=1
+  const run=await refreshSapSnapshot(data,{fetcher});assert.equal(data.orders[0].sapItem,'00010')
+  reads=[];assert.equal(await refreshSapSnapshot(data,{fetcher,previousRun:run}),run);assert.equal(reads.length,1)
+})
+
+test('public workspace refresh reads new SAP snapshots and keeps last good data during an outage and reload',async()=>{
+  let state,registry=null,offline=false,run='1789104243174-a81c04a60c154b3b9f60bd5e139628d4',rows={a:sapRow()}
+  const original={orders:[{...unlinked(),eta:'2026-10-01'}],shipments:[],issues:[]}
+  const fetcher=async(url,options)=>{
+    if(url.includes('/sapReferenceLinks/')){
+      if(offline)throw new Error('offline')
+      if(options.method==='PUT'){assert.equal(options.headers['If-Match'],'test-etag');registry=JSON.parse(options.body)}
+      return Response.json(registry,{headers:{etag:'test-etag'}})
+    }
+    assert.equal(options?.method,undefined)
+    if(url.endsWith('/source.json'))return Response.json({kind:'excel',schemaVersion:1,generation:'g',dataJson:JSON.stringify(original)})
+    if(url.includes('/versions.json?')||url.endsWith('/partsWorkbook.json'))return Response.json(null)
+    if(offline)throw new Error('offline')
+    if(url.endsWith('/current.json'))return Response.json({run,finishedAt:1789104255050,counts:{po:1},hash:'hash'})
+    if(url.endsWith('/hash.json'))return Response.json('hash')
+    if(url.endsWith('/tables/po.json'))return Response.json(rows)
+    throw new Error(url)
+  }
+  const cloud=await connectPublicWorkspace(p=>state=p.state,e=>{throw e},{fetcher})
+  try{
+    assert.equal(state.orders[0].sapItem,'00010');assert.equal(state.orders[0].eta,'2026-10-01')
+    offline=true;await cloud.refresh();assert.equal(state.orders[0].sapItem,'00010');assert.equal(state.orders[0].sapReferenceRefreshError,true)
+    offline=false;await cloud.refresh();assert.equal(state.orders[0].sapReferenceRefreshError,false)
+    run='1789104243175-a81c04a60c154b3b9f60bd5e139628d4';rows={a:sapRow('00010',{MATNR:'NEW'})}
+    await cloud.refresh();assert.equal(state.orders[0].sapPart,'NEW');assert.equal(state.orders[0].eta,'2026-10-01')
+    assert.ok(detectChecks(state.orders,[]).some(c=>c.kind==='material'))
+    const reloaded=await connectPublicWorkspace(p=>state=p.state,e=>{throw e},{fetcher})
+    await reloaded.disconnect();assert.equal(state.orders[0].sapPart,'NEW');assert.equal(state.orders[0].sapItem,'00010')
+    assert.equal(sapLineMatches(state.orders[0]),true,'numbering convention survives page reloads')
+  }finally{await cloud.disconnect()}
+})
+
+test('anchor conflicts fail closed and a lost save acknowledgement is safely verified',async()=>{
+  let value=null,conflict=false,loseAck=false
+  const store=createSapAnchorStore({base:'https://example.test',generation:'g',fetcher:async(url,options)=>{
+    if(options.method==='PUT'){
+      if(conflict)return new Response('',{status:412})
+      value=JSON.parse(options.body)
+      if(loseAck)throw Error('connection_lost')
+    }
+    return Response.json(value,{headers:{etag:'etag'}})
+  }})
+  const data={orders:[unlinked()]},save=await store(data);applySapSnapshotReferences(data,[sapRow()],1789104255050)
+  conflict=true;await assert.rejects(save(data),/save_failed/);assert.equal(value,null)
+  conflict=false;loseAck=true;await save(data);assert.equal(value.links.row1.anchor.item,'00010')
+  const newSource={orders:[unlinked()]};newSource.orders[0].importFields.material='CHANGED'
+  await assert.rejects(store(newSource),/source_conflict/)
+})
+
+test('incomplete or older SAP snapshots cannot replace the last good snapshot',async()=>{
+  const data={orders:[unlinked()],sapSnapshotFinishedAt:200},before=structuredClone(data)
+  const pointer={run:'1-a81c04a6-0c15-4b3b-9f60-bd5e139628d4',finishedAt:100,counts:{po:1},hash:'hash'}
+  const fetcher=async url=>Response.json(url.endsWith('/current.json')?pointer:url.endsWith('/hash.json')?'hash':{a:sapRow('00010',{MENGE:null})})
+  await assert.rejects(refreshSapSnapshot(data,{fetcher}),/older/);assert.deepEqual(data,before)
+  pointer.finishedAt=300;await assert.rejects(refreshSapSnapshot(data,{fetcher}),/incomplete/);assert.deepEqual(data,before)
+  await assert.rejects(refreshSapSnapshot(data,{previousRun:pointer.run,fetcher:async()=>Response.json(null)}),/pointer_missing/)
+})
+
+test('missing material does not produce a fallback link, and shared SAP lines never authorize quantity totals',()=>{
+  const missing=unlinked();missing.importFields.material='';apply(missing,[sapRow('00010',{MATNR:''})])
+  assert.equal(missing.sapReferenceStatus,'unmatched');assert.equal(missing.sapReferenceReason,'material_missing')
+  const data={orders:[{...unlinked(),quantityComparable:true,unit:'EA'},{...unlinked(),id:'second',quantityComparable:true,unit:'EA'}]}
+  applySapSnapshotReferences(data,[sapRow()],1789104255050)
+  assert.deepEqual(data.orders.map(o=>o.sapSharedLineCount),[2,2]);assert.ok(data.orders.every(o=>!o.quantityComparable))
+  assert.ok(detectChecks(data.orders,[]).every(c=>c.kind==='shared_reference'))
+})
+
+test('SAP quantity and unit changes remain discrepancies and original comparability recovers after correction',()=>{
+  const o={...order(),cancelled:false,qty:5,part:'MAT1',quantityComparable:true,unit:'EA',importFields:{po:'4900000001',line:10,material:'MAT1',qty:5}}
+  apply(o,[sapRow('00010',{MENGE:6})]);assert.equal(o.quantityComparable,false)
+  assert.ok(detectChecks([o],[]).some(c=>c.kind==='quantity'))
+  apply(o,[sapRow()]);assert.equal(o.quantityComparable,true)
+  assert.ok(!detectChecks([o],[]).some(c=>c.kind==='quantity'))
+  apply(o,[sapRow('00010',{MEINS:'M'})]);assert.equal(o.quantityComparable,false)
+  assert.ok(detectChecks([o],[]).some(c=>c.kind==='unit'))
+  assert.equal(factsFor(o,[]).find(f=>f.field.en==='Unit').sap,'M')
+})
 
 test('PO and line compare current Excel against independent SAP originals, including completed records',()=>{
   const o=order()
