@@ -1,7 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { workspaceOrders,workspaceShipments,reconcile,detectChecks,resolveFact,updateCase,recordDispatch,applyDemoSnapshot,businessSummary,mappingReady,priceReady,reportedQty,groupedQuantity,remainingQty,updateShipment,delayDays,shipmentDelayed } from '../src/reconciliation.mjs'
+import { workspaceOrders,workspaceShipments,reconcile,detectChecks,resolveFact,updateCase,recordDispatch,applyDemoSnapshot,businessSummary,mappingReady,priceReady,reportedQty,groupedQuantity,remainingQty,updateShipment,delayDays,shipmentDelayed,factsFor } from '../src/reconciliation.mjs'
 const fixture=()=>({orders:workspaceOrders(),shipments:workspaceShipments()})
+
+test('missing SAP material is not substituted with a workbook material in comparison facts',()=>{
+  const order={...workspaceOrders()[0],sapPart:'',part:'WORKBOOK-ONLY',soPart:''}
+  const material=factsFor(order,[])[0]
+  assert.equal(material.sap,'—');assert.equal(material.business,'')
+})
 test('checks distinguish facts from timing and deduplicate repeat runs',()=>{
   const {orders,shipments}=fixture();let cases=reconcile(orders,shipments)
   assert.equal(cases.filter(c=>c.kind==='shipment').length,2)

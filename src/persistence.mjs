@@ -4,7 +4,9 @@ export const SHIPMENT_FIELDS = ['id','order','qty','allocations','mode','ref','c
 export const copy = value => JSON.parse(JSON.stringify(value))
 const pick = (row,fields) => Object.fromEntries(fields.filter(k=>row[k]!==undefined).map(k=>[k,copy(row[k])]))
 const index = rows => Object.fromEntries(rows.map(row=>[row.id,row]))
-const safeKey = key => typeof key==='string' && key.length>0 && !['__proto__','constructor','prototype'].includes(key) && !/[.#$\[\]/\u0000-\u001f\u007f]/.test(key)
+// Firebase keys forbid control characters as well as path separators.
+// eslint-disable-next-line no-control-regex
+const safeKey = key => typeof key==='string' && key.length>0 && !['__proto__','constructor','prototype'].includes(key) && !/[.#$[\]/\u0000-\u001f\u007f]/.test(key)
 export function projectState(state){
   for(const rows of [state.orders,state.shipments,state.issues,state.checks]){
     if(!Array.isArray(rows)||rows.some(r=>!safeKey(r.id))||new Set(rows.map(r=>r.id)).size!==rows.length)throw new Error('invalid_records')

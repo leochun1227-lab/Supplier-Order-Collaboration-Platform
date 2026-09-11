@@ -7,6 +7,7 @@
   "salesOrg": "3090",
   "customer": "0000003060",
   "sapCredentialPath": "C:/secure/sap-credential.xml",
-  "serviceAccountPath": "C:/secure/firebase-service-account.json",
-  "nodePath": "C:/Program Files/nodejs/node.exe"
+  "pythonPath": "C:/Python/python.exe",
+  "outputDir": "C:/SupplierSync/outputs/firebase-sync",
+  "firebasePublicTest": true
 }

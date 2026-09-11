@@ -1,11 +1,13 @@
 <script setup>
 import { language, t as tr, setLanguage, dateLabel } from './i18n.mjs'
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, KeepAlive } from 'vue'
 import { Button, Badge, Dialog } from 'frappe-ui'
 import { Boxes, LayoutList, CalendarClock, Ship, ShieldAlert, ChartNoAxesCombined, Database, Search, ArrowUpRight, ArrowRight, ChevronRight, Check, CheckCheck, Clock3, CircleHelp, RefreshCw, Download, Plus, X, LockKeyhole, MessageSquare, PackageCheck, Factory, Plane, CircleAlert, PanelLeftClose } from 'lucide-vue-next'
 import { TODAY, fmt, daysLate, openQty, canSee, validateCommitment, seedOrders, seedIssues, seedShipments } from './domain.mjs'
 import Operations from './Operations.vue'
 import CloudPanel from './CloudPanel.vue'
+import PartsWorkbook from './PartsWorkbook.vue'
+import { Table2 } from 'lucide-vue-next'
 import { publicTestEnabled } from './runtime-config.mjs'
 import { connectPublicWorkspace } from './public-firebase-store.mjs'
 import { useCurrentBusinessDate } from './domain.mjs'
@@ -23,7 +25,7 @@ const orders=ref(workspaceOrders()), issues=ref(seedIssues().filter(i=>i.id!=='E
 const checks=ref(reconcile(orders.value,shipments.value.filter(s=>!s.deletedAt))), synced=ref(false),reviewOpen=ref(false),reviewCase=ref(null),dispatchOpen=ref(false),dispatchSelected=ref(null)
 const allIssues=computed(()=>[...issues.value,...checks.value])
 watch([orders,shipments],()=>{checks.value=reconcile(orders.value,shipments.value.filter(s=>!s.deletedAt),checks.value)}, {deep:true})
-const page=ref('overview'), role=ref('buyer'), query=ref(''), filter=ref('open'), type=ref('全部类型'), mode=ref('全部运输'), buyer=ref('全部采购员')
+const page=ref('parts'), role=ref('buyer'), query=ref(''), filter=ref('open'), type=ref('全部类型'), mode=ref('全部运输'), buyer=ref('全部采购员')
 const overviewSelection=ref(null)
 const selected=ref(null), detailOpen=ref(false), detailTab=ref('overview'), modal=ref(''), modalOpen=ref(false), error=ref(''), notice=ref(''), sidebar=ref(false)
 const comment=ref(''), response=ref('confirm'), batches=ref([]), reason=ref(''), issueStatus=ref('处理中'), activeIssue=ref(null), activeShipment=ref(null), shipmentStage=ref(2), shipmentLocation=ref(''), shipmentEta=ref('')
@@ -32,12 +34,12 @@ let toastTimer
 const importSummary=ref(null)
 const cloudConnected=ref(false),cloudBusy=ref(false),cloudError=ref(''),cloudRevision=ref(0),cloudSavedAt=ref(null),cloudEmail=ref('')
 const cloudStatus=computed(()=>cloudBusy.value?tr(label('正在保存／连接…','Saving / connecting…')):cloudError.value?tr(label('保存／连接失败','Save / connection failed')):cloudConnected.value?tr(label('已连接 · 更改自动保存','Connected · changes saved automatically')):tr(label('本次会话 · 未保存到云端','Session only · not saved to cloud')))
-let cloud=null,pendingRemote=null,pendingToast=null,cloudGeneration=null
+let cloud=null,pendingRemote=null,pendingToast=null,cloudGeneration=null,cloudWorkbookRevision=0
 const cloudMessages={cloud_not_configured:label('等待 Firebase 登录配置。','Firebase sign-in configuration is pending.'),membership_required:label('此账户尚未获得内部试用工作区权限。','This account has no internal pilot workspace access.'),source_not_ready:label('工作区尚未初始化，请联系管理员。','Workspace has not been initialized. Contact your administrator.'),save_conflict:label('其他人已更新数据。本次更改未保存，请重新打开记录后提交。','Someone else updated these records. Your changes were not saved; reopen and submit again.'),busy:label('上一项操作正在保存，请稍候。','The previous operation is saving. Please wait.'),posted_shipment:label('已关联 SAP 发货或收货的批次不能删除，请走核对流程。','Batches linked to SAP dispatch or receipts cannot be deleted; use reconciliation.'),reason_required:label('请填写删除原因。','Enter a deletion reason.')}
 function cloudMessage(e){return tr(cloudMessages[e.code]||cloudMessages[e.message]||label('操作未完成，请检查登录、权限或网络后重试。','Operation incomplete. Check sign-in, permissions or network and retry.'))}
 function captureState(){return copy({orders:orders.value,shipments:shipments.value,issues:issues.value,checks:checks.value})}
 function applyState(state){const id=selected.value?.id;orders.value=state.orders;shipments.value=state.shipments;issues.value=state.issues;checks.value=reconcile(orders.value,shipments.value.filter(s=>!s.deletedAt),state.checks);selected.value=id?orders.value.find(o=>o.id===id)||null:null;activeShipment.value=shipments.value.find(s=>s.id===activeShipment.value?.id)||null;activeIssue.value=issues.value.find(i=>i.id===activeIssue.value?.id)||null}
-function applyRemote(packet){if(packet.summary)importSummary.value=packet.summary;cloudGeneration=packet.generation;applyState(packet.state);cloudRevision.value=packet.revision;cloudSavedAt.value=packet.savedAt;cloudEmail.value=packet.email}
+function applyRemote(packet){if(packet.summary)importSummary.value=packet.summary;cloudGeneration=packet.generation;cloudWorkbookRevision=packet.workbookRevision||0;applyState(packet.state);cloudRevision.value=packet.revision;cloudSavedAt.value=packet.savedAt;cloudEmail.value=packet.email}
 function receiveRemote(packet){if(cloudBusy.value||detailOpen.value||modalOpen.value||reviewOpen.value||dispatchOpen.value){pendingRemote=packet;return}applyRemote(packet)}
 watch([detailOpen,modalOpen,reviewOpen,dispatchOpen],()=>{if(pendingRemote&&!cloudBusy.value&&!detailOpen.value&&!modalOpen.value&&!reviewOpen.value&&!dispatchOpen.value){applyRemote(pendingRemote);pendingRemote=null}})
 async function loginCloud(input){if(cloudBusy.value)return;cloudBusy.value=true;cloudError.value='';try{cloud=await connectCloud(input.email,input.password,receiveRemote,e=>cloudError.value=cloudMessage(e));role.value='buyer';cloudConnected.value=true;if(pendingRemote){applyRemote(pendingRemote);pendingRemote=null}}catch(e){cloudError.value=cloudMessage(e)}finally{cloudBusy.value=false}}
@@ -50,9 +52,9 @@ async function savedAction(name,action){
   if(!cloudConnected.value){if(publicTestEnabled)throw new Error(tr(label('请先连接 Firebase 再保存。','Connect to Firebase before saving.')));return action()}
   const before=captureState(),expected=cloudRevision.value,ui={modal:modalOpen.value,review:reviewOpen.value,dispatch:dispatchOpen.value}
   cloudBusy.value=true;cloudError.value='';pendingToast=null;error.value=''
-  try{action();if(error.value)throw new Error('validation_failed');await nextTick();const result=await cloud.save(captureState(),name,expected,cloudGeneration);if(result){cloudRevision.value=result.revision;cloudSavedAt.value=result.at}cloudBusy.value=false;if(pendingToast)toast(pendingToast);if(pendingRemote&&pendingRemote.revision<=cloudRevision.value)pendingRemote=null}
+  try{action();if(error.value)throw new Error('validation_failed');await nextTick();const result=await cloud.save(captureState(),name,expected,cloudGeneration,cloudWorkbookRevision);if(result){cloudRevision.value=result.revision;cloudSavedAt.value=result.at}cloudBusy.value=false;if(pendingToast)toast(pendingToast);if(pendingRemote&&pendingRemote.revision<=cloudRevision.value&&(pendingRemote.workbookRevision||0)<=cloudWorkbookRevision)pendingRemote=null}
   catch(e){applyState(before);modalOpen.value=ui.modal;reviewOpen.value=ui.review;dispatchOpen.value=ui.dispatch;cloudError.value=e.message==='validation_failed'?tr(error.value):cloudMessage(e);throw new Error(cloudError.value)}
-  finally{cloudBusy.value=false;pendingToast=null}
+  finally{cloudBusy.value=false;pendingToast=null;if(pendingRemote&&!detailOpen.value&&!modalOpen.value&&!reviewOpen.value&&!dispatchOpen.value){applyRemote(pendingRemote);pendingRemote=null}}
 }
 async function submitResponse(...args){try{return await savedAction("submitResponse",()=>local_submitResponse(...args))}catch(e){error.value=e.message;toast(e.message)}}
 async function submitEta(...args){try{return await savedAction("submitEta",()=>local_submitEta(...args))}catch(e){error.value=e.message;toast(e.message)}}
@@ -70,6 +72,8 @@ async function restoreShipment(s){try{await savedAction('restoreDispatch',()=>{r
 
 const nav=[{id:'overview',title:'总览看板',icon:ChartNoAxesCombined},{id:'orders',title:'订单工作台',icon:LayoutList},{id:'delivery',title:'交期与承诺',icon:CalendarClock},{id:'shipments',title:'发运与物流',icon:Ship},{id:'exceptions',title:'异常与待办',icon:ShieldAlert},{id:'reports',title:'履约分析',icon:ChartNoAxesCombined},{id:'data',title:'数据中心',icon:Database}]
 const titles={orders:['订单工作台','从订单确认到交付，所有协作在这里发生。'],delivery:['交期与承诺','关注交付变化，保留每一次承诺。'],shipments:['发运与物流','按批次跟进运输，连接订单与到货。'],exceptions:['异常与待办','把风险交给明确的责任人，持续跟进结果。'],reports:['履约分析','回顾历史表现，定位交付问题与改善方向。'],data:['数据中心','SAP 持续同步，平台维护协作数据。']}
+nav.splice(2,0,{id:'parts',title:{zh:'备品备件表格',en:'Parts workbook'},icon:Table2})
+titles.parts=[{zh:'备品备件表格',en:'Parts workbook'},'']
 const visible=computed(()=>orders.value.filter(o=>canSee(o,role.value)))
 titles.overview=['总览看板','掌握订单、在途货物与交付风险。']
 const visibleIssues=computed(()=>allIssues.value.filter(i=>visible.value.some(o=>o.id===i.order)))
@@ -97,7 +101,7 @@ const modalTitle=computed(()=>({response:'供应商订单响应',eta:'提交交�
 const scopeLabel=computed(()=>role.value==='buyer'?'全部供应商':'Longtree 专属视图')
 
 function toast(text){if(cloudBusy.value){pendingToast=text;return}notice.value=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>notice.value='',4200)}
-function navigate(id){if(id==='data'&&role.value!=='buyer')return;page.value=id;sidebar.value=false;detailOpen.value=false}
+function navigate(id){if((id==='data'||id==='parts')&&role.value!=='buyer')return;page.value=id;sidebar.value=false;detailOpen.value=false}
 function inspectOverview(selection){overviewSelection.value=selection;query.value='';type.value='全部类型';mode.value='全部运输';buyer.value='全部采购员';filter.value='all';navigate('orders')}
 watch(role,()=>overviewSelection.value=null)
 function openOrder(order,tab='overview'){selected.value=order;detailTab.value=tab;detailOpen.value=true;comment.value=''}
@@ -194,25 +198,28 @@ onUnmounted(()=>toolLifecycle.abort())
 </script>
 
 <template>
-  <div class="workspace" :class="{'overview-layout':page==='overview'}">
-    <aside class="sidebar" :class="{mobileOpen:sidebar}">
+  <div class="workspace" :class="{'overview-layout':page==='overview','parts-layout':page==='parts'}" @keydown.esc="sidebar=false">
+    <aside id="workspace-navigation" class="sidebar" :class="{mobileOpen:sidebar}" :inert="page==='parts'&&!sidebar">
+      <button v-if="page==='parts'" class="parts-nav-close" :aria-label="tr(label('收起导航','Hide navigation'))" @click="sidebar=false"><X :size="18"/>{{tr(label('收起导航','Hide navigation'))}}</button>
       <a class="brand" href="#/" @click.prevent="navigate('overview')"><span class="brandmark"><Boxes :size="23"/></span><span>REGENT<small>SUPPLIER COLLABORATION</small></span></a>
       <div class="workspace-label">{{tr("采购与供应商协作")}} <span>AU / CN</span></div>
-      <nav :aria-label="tr(&quot;主要导航&quot;)"><button v-for="n in nav.filter(n=>role==='buyer'||n.id!=='data')" :key="n.id" :class="['navitem',{active:page===n.id}]" @click="navigate(n.id)"><component :is="n.icon" :size="19"/><span>{{tr(n.title)}}</span><span v-if="n.id==='exceptions'&&activeIssues.length" class="navcount">{{tr(activeIssues.length)}}</span></button></nav>
+      <nav :aria-label="tr(&quot;主要导航&quot;)"><button v-for="n in nav.filter(n=>role==='buyer'||!['data','parts'].includes(n.id))" :key="n.id" :class="['navitem',{active:page===n.id}]" @click="navigate(n.id)"><component :is="n.icon" :size="19"/><span>{{tr(n.title)}}</span><span v-if="n.id==='exceptions'&&activeIssues.length" class="navcount">{{tr(activeIssues.length)}}</span></button></nav>
       <div class="sidebar-bottom"><div class="connection"><span class="live-dot"></span><div>{{tr("SAP + 协作平台")}}<small>{{publicTestEnabled?tr(label('真实台账 · 公开测试','Imported ledger · public test')):tr('演示环境 · 业务日期 09/08')}}</small></div></div><button class="help-link" @click="openModal('help')"><CircleHelp :size="17"/> {{tr("预览说明")}} <ArrowUpRight :size="15"/></button><a href="https://github.com/frappe/frappe-ui" target="_blank" rel="noreferrer" class="powered">Built with Frappe UI ↗</a></div>
     </aside>
+    <button v-if="page==='parts'&&sidebar" class="parts-nav-backdrop" :aria-label="tr(label('收起导航','Hide navigation'))" @click="sidebar=false"/>
     <div class="main-shell">
-      <header class="topbar"><div class="crumb"><button class="mobile-menu" :aria-label="tr(&quot;展开导航&quot;)" @click="sidebar=!sidebar"><PanelLeftClose :size="20"/></button><span>{{tr("供应商协作")}}</span><ChevronRight :size="14"/><strong>{{tr(titles[page][0])}}</strong></div><div class="topbar-right"><button class="demo-chip" @click="navigate('data')">{{cloudStatus}}</button><div class="language-switch" role="group" :aria-label="tr('语言切换')"><button type="button" lang="zh-CN" :aria-pressed="language==='zh'" @click="setLanguage('zh')">中文</button><button type="button" lang="en" :aria-pressed="language==='en'" @click="setLanguage('en')">English</button></div><label v-if="!cloudConnected&&!publicTestEnabled" class="role-select"><span class="avatar">{{tr(role==='buyer'?'R':'L')}}</span><select v-model="role" :aria-label="tr(&quot;切换演示角色&quot;)"><option value="buyer">{{tr("Regent · 内部采购")}}</option><option value="supplier">{{tr("Longtree · 供应商")}}</option></select></label></div></header>
-      <section v-if="publicTestEnabled&&!cloudConnected" class="cloud-panel"><h2>{{tr(label('正在连接真实台账','Connecting to imported records'))}}</h2><p>{{cloudError||tr(label('从 Firebase 加载完整数据…','Loading the complete dataset from Firebase…'))}}</p><Button v-if="!cloudBusy" @click="startPublicWorkspace">{{tr(label('重新连接','Reconnect'))}}</Button></section>
-      <main v-if="!publicTestEnabled||cloudConnected" :inert="cloudBusy" :class="{'overview-main':page==='overview','orders-main':page==='orders'}">
+      <header v-if="page!=='parts'" class="topbar"><div class="crumb"><button class="mobile-menu" :aria-label="tr(sidebar?label('收起导航','Hide navigation'):label('展开导航','Show navigation'))" :aria-expanded="sidebar" aria-controls="workspace-navigation" @click="sidebar=!sidebar"><PanelLeftClose :size="19"/><span v-if="page==='parts'">{{tr(label('导航','Navigation'))}}</span></button><template v-if="page!=='parts'"><span>{{tr("供应商协作")}}</span><ChevronRight :size="14"/><strong>{{tr(titles[page][0])}}</strong></template><span v-else class="parts-brand">REGENT</span></div><div class="topbar-right"><button v-if="page!=='parts'" class="demo-chip" @click="navigate('data')">{{cloudStatus}}</button><div class="language-switch" role="group" :aria-label="tr('语言切换')"><button type="button" lang="zh-CN" :aria-pressed="language==='zh'" @click="setLanguage('zh')">中文</button><button type="button" lang="en" :aria-pressed="language==='en'" @click="setLanguage('en')">English</button></div><label v-if="!cloudConnected&&!publicTestEnabled" class="role-select"><span class="avatar">{{tr(role==='buyer'?'R':'L')}}</span><select v-model="role" :aria-label="tr(&quot;切换演示角色&quot;)"><option value="buyer">{{tr("Regent · 内部采购")}}</option><option value="supplier">{{tr("Longtree · 供应商")}}</option></select></label></div></header>
+      <section v-if="publicTestEnabled&&!cloudConnected&&page!=='parts'" class="cloud-panel"><h2>{{tr(label('正在连接真实台账','Connecting to imported records'))}}</h2><p>{{cloudError||tr(label('从 Firebase 加载完整数据…','Loading the complete dataset from Firebase…'))}}</p><Button v-if="!cloudBusy" @click="startPublicWorkspace">{{tr(label('重新连接','Reconnect'))}}</Button></section>
+      <main v-if="!publicTestEnabled||cloudConnected||page==='parts'" :inert="cloudBusy&&page!=='parts'" :class="{'overview-main':page==='overview','orders-main':page==='orders','parts-main':page==='parts'}">
         <div v-if="page==='orders'" class="orders-toolbar">
           <div class="orders-title-group"><h1>{{tr(titles.orders[0])}}</h1><span class="orders-scope">{{tr(scopeLabel)}}</span></div>
           <div class="orders-actions"><Button variant="outline" @click="openModal('reset')"><template #prefix><RefreshCw :size="14"/></template>{{tr("重置演示")}}</Button></div>
         </div>
-        <div v-else-if="page!=='overview'" class="page-heading"><div><div class="eyebrow">{{tr(scopeLabel)}}<span> / </span> ORDER COLLABORATION</div><h1>{{tr(titles[page][0])}}</h1><p>{{tr(titles[page][1])}}</p></div><div class="heading-actions"><Button variant="outline" size="lg" @click="openModal('reset')"><template #prefix><RefreshCw :size="15"/></template>{{tr("重置演示")}}</Button></div></div>
+        <div v-else-if="page!=='overview'&&page!=='parts'" class="page-heading"><div><div class="eyebrow">{{tr(scopeLabel)}}<span> / </span> ORDER COLLABORATION</div><h1>{{tr(titles[page][0])}}</h1><p>{{tr(titles[page][1])}}</p></div><div class="heading-actions"><Button variant="outline" size="lg" @click="openModal('reset')"><template #prefix><RefreshCw :size="15"/></template>{{tr("重置演示")}}</Button></div></div>
 
+        <KeepAlive><PartsWorkbook v-if="page==='parts'" @saved="cloud?.updateWorkbook?.($event)"><template #navigation><button class="mobile-menu" :aria-label="tr(sidebar?label('收起导航','Hide navigation'):label('展开导航','Show navigation'))" :aria-expanded="sidebar" aria-controls="workspace-navigation" @click="sidebar=!sidebar"><PanelLeftClose :size="19"/><span v-if="page==='parts'">{{tr(label('导航','Navigation'))}}</span></button></template><template #header-actions><div class="topbar-right"><button v-if="page!=='parts'" class="demo-chip" @click="navigate('data')">{{cloudStatus}}</button><div class="language-switch" role="group" :aria-label="tr('语言切换')"><button type="button" lang="zh-CN" :aria-pressed="language==='zh'" @click="setLanguage('zh')">中文</button><button type="button" lang="en" :aria-pressed="language==='en'" @click="setLanguage('en')">English</button></div><label v-if="!cloudConnected&&!publicTestEnabled" class="role-select"><span class="avatar">{{tr(role==='buyer'?'R':'L')}}</span><select v-model="role" :aria-label="tr(&quot;切换演示角色&quot;)"><option value="buyer">{{tr("Regent · 内部采购")}}</option><option value="supplier">{{tr("Longtree · 供应商")}}</option></select></label></div></template></PartsWorkbook></KeepAlive>
         <CloudPanel v-if="page==='data'" :configured="cloudConfigured||publicTestEnabled" :public-test="publicTestEnabled" :summary="importSummary" :connected="cloudConnected" :busy="cloudBusy" :status="cloudStatus" :error="cloudError" :email="cloudEmail" :revision="cloudRevision" :saved-at="cloudSavedAt" :deleted="shipments.filter(s=>s.deletedAt)" @connect="loginCloud" @disconnect="leaveCloud" @restore="restoreShipment"/>
-        <div v-if="publicTestEnabled&&importSummary" class="import-strip"><b>{{tr(label('真实台账 · Firebase 公开测试','Imported records · Firebase public test'))}}</b><span>{{importSummary.masterRecords}} {{tr(label('条主记录','master records'))}} · {{importSummary.masterCompletion.NG}} {{tr(label('条初始未完成','initially open'))}} · {{tr(label('台账截至 09/04；SAP 收货与在途尚待核对','Ledger as of 04 Sep; SAP receipts and transit need verification'))}}</span></div>
+        <div v-if="publicTestEnabled&&importSummary&&page!=='parts'" class="import-strip"><b>{{tr(label('真实台账 · Firebase 公开测试','Imported records · Firebase public test'))}}</b><span>{{importSummary.masterRecords}} {{tr(label('条主记录','master records'))}} · {{importSummary.masterCompletion.NG}} {{tr(label('条未完成标记','marked open'))}} · {{tr(label('台账截至 09/04；SAP 收货与在途尚待核对','Ledger as of 04 Sep; SAP receipts and transit need verification'))}}</span></div>
         <Operations v-if="['overview','orders','exceptions','data','shipments'].includes(page)" :view="page" :orders="visible" :shipments="visibleShipments" :issues="visibleIssues" :role="role" :selection="overviewSelection" :synced="synced" @inspect="inspectOverview" @open-order="openOrder" @navigate="navigate" @reset="openModal('reset')" @clear-selection="overviewSelection=null" @review="review" @dispatch="startDispatch" @sync="syncDemo" @shipment="startShipment"/>
         <template v-else-if="page==='delivery'">
           <div class="section-summary"><span><strong>{{tr(pending.length)}}</strong> {{tr("项变更待审核")}}</span><span><strong>{{tr(visible.filter(o=>daysLate(o)>0&&openQty(o)>0).length)}}</strong> {{tr("行存在交期风险")}}</span><span>{{tr("日期统一表示")}} <b>{{tr("预计到仓")}}</b></span></div>

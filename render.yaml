@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: regent-supplier-collaboration
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: NODE_VERSION
+        value: "24"

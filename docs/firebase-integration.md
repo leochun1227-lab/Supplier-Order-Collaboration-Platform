@@ -1,5 +1,9 @@
 # Firebase 保存与 SAP 同步
 
+## 2026-09-10：部署入口更新
+
+SAP 同步已改为 `run.bat` 调用独立 Python 程序；目标电脑执行一次 `setup-sap-sync.bat` 后，可自行设置每天两次任务。开发电脑未创建任务，也未运行本轮真实 SAP 提取。新程序沿用用户授权的 Firebase 公开测试模式，保留完整快照并验证回读，不修改网页协作区。安装步骤与 Render 配置见 [RENDER-SAP-SETUP.md](RENDER-SAP-SETUP.md)。下文关于旧 PowerShell/Node 同步及私有试用的说明属于历史设计，以新部署说明为准。
+
 ## 2026-09-10：已启用用户确认的公开测试
 
 用户明确确认根规则 `.read: true`、`.write: true` 后，已通过 REST 导入四份台账并回读校验：1,253 条主记录，另三份表 119 条记录关联为证据。原始包位于 `supplierCollaboration/imports`，网页来源位于 `supplierCollaboration/workspaces/excel-20260904/source`。真实数据不打包进静态资源。

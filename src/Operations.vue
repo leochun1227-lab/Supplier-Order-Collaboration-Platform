@@ -1,8 +1,9 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { Button, Badge } from 'frappe-ui'
-import { ArrowUpRight, ArrowRight, Search, RefreshCw, Plus, Ship, Plane, CircleAlert, CheckCheck } from 'lucide-vue-next'
-import { t as tr, dateLabel } from './i18n.mjs'
+import { ArrowUpRight, ArrowRight, Search, RefreshCw, Plus, Ship, Plane, CircleAlert, CheckCheck, Download } from 'lucide-vue-next'
+import { t as tr, dateLabel, language } from './i18n.mjs'
+import { downloadExceptions } from './exception-export.mjs'
 import { TODAY, openQty } from './domain.mjs'
 import { money, percent } from './analytics.mjs'
 import { KINDS, label, businessSummary, reportedQty, remainingQty, groupLabel, groupedQuantity, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
@@ -49,6 +50,17 @@ function exportView(){
   const records=rows.value.map(o=>[o.po,o.item,o.part,o.buyer,tr(o.type),l(o.sourceType==='make'?'自制件':'外购件',o.sourceType==='make'?'In-house':'Purchased'),o.unit,o.qty,reportedQty(o),o.shipped,remainingQty(o),o.promisedEtd,o.so,relatedCases(o).length])
   const url=URL.createObjectURL(new Blob(['\uFEFF'+[headers,...records].map(r=>r.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='Regent-demo-orders.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
+const exceptionExportError=ref(''),exceptionExportNotice=ref('')
+function exportExceptionView(){
+  exceptionExportError.value='';exceptionExportNotice.value=''
+  if (!tasks.value.length) return
+  try {
+    downloadExceptions(tasks.value,props.orders,{language:language.value})
+    exceptionExportNotice.value=l('已导出当前筛选的 '+tasks.value.length+' 条异常（含全部页）。','Exported all '+tasks.value.length+' matching issues across all pages.')
+  } catch {
+    exceptionExportError.value=l('异常清单导出失败，请重试。','Could not export the exception list. Please retry.')
+  }
+}
 </script>
 
 <template>
@@ -83,9 +95,11 @@ function exportView(){
   </template>
 
   <template v-else-if="view==='data'||view==='exceptions'">
+    <p v-if="imported" class="ops-note">{{l('当前按已导入的 SAP 参考数据核对；后续 SAP 原始快照尚未自动接入此清单。导出中的 SAP 数据时间表示参考数据日期。','Checks use imported SAP reference data. Later raw SAP snapshots are not yet applied to this list. SAP data dates in exports refer to the reference data.')}}</p>
     <div v-if="view==='data'&&!imported" class="ops-sync"><div><b>{{l('SAP 与平台核对','SAP / platform reconciliation')}}</b><small>{{l('模拟 SAP 快照','Simulated SAP snapshot')}} · {{synced?'09/08 10:00':'09/08 09:00'}} · {{l('初始化来源截至','Initial source as of')}} 09/04</small></div><Button variant="outline" :disabled="synced" @click="emit('sync')"><RefreshCw :size="15"/>{{l(synced?'示例快照已应用':'模拟接收后续 SAP 快照',synced?'Demo snapshot applied':'Simulate later SAP snapshot')}}</Button></div>
     <div class="ops-check-metrics"><div><small>{{l('未关闭事项','Open tasks')}}</small><strong>{{(view==='data'?checks:issues).filter(i=>i.status!=='已解决').length}}</strong></div><div><small>{{l('涉及订单行 · 去重','Affected lines · unique')}}</small><strong>{{new Set((view==='data'?checks:issues).filter(i=>i.status!=='已解决').map(c=>c.order)).size}}</strong></div><div><small>{{l('已通过核对／已解决','Passed / resolved')}}</small><strong>{{(view==='data'?checks:issues).filter(i=>i.status==='已解决').length}}</strong></div><div><small>{{l('处理方式','Processing')}}</small><b>{{l('规则核对 + 人员确认','Rules + human review')}}</b></div></div>
-    <div class="ops-filters ops-filter-panel"><label class="ops-search"><Search :size="16"/><input v-model="query" :placeholder="l('搜索任务或 PO','Search task or PO')"/></label><select v-model="kind" :aria-label="l('问题类型','Issue type')"><option value="">{{l('全部问题类型','All issue types')}}</option><option v-for="(title,key) in KINDS" :key="key" :value="key">{{tr(title)}}</option></select><select v-model="owner" :aria-label="l('任务责任人','Task owner')"><option value="">{{l('全部责任人','All owners')}}</option><option v-for="b in [...new Set(issues.map(i=>i.owner))]" :key="b">{{b}}</option></select><select v-model="caseStatus" :aria-label="l('任务状态','Task status')"><option value="active">{{l('未关闭','Open')}}</option><option value="closed">{{l('已解决','Resolved')}}</option><option value="all">{{l('全部状态','All states')}}</option></select></div>
+    <div class="ops-filters ops-filter-panel"><label class="ops-search"><Search :size="16"/><input v-model="query" :placeholder="l('搜索任务或 PO','Search task or PO')"/></label><select v-model="kind" :aria-label="l('问题类型','Issue type')"><option value="">{{l('全部问题类型','All issue types')}}</option><option v-for="(title,key) in KINDS" :key="key" :value="key">{{tr(title)}}</option></select><select v-model="owner" :aria-label="l('任务责任人','Task owner')"><option value="">{{l('全部责任人','All owners')}}</option><option v-for="b in [...new Set(issues.map(i=>i.owner))]" :key="b">{{b}}</option></select><select v-model="caseStatus" :aria-label="l('任务状态','Task status')"><option value="active">{{l('未关闭','Open')}}</option><option value="closed">{{l('已解决','Resolved')}}</option><option value="all">{{l('全部状态','All states')}}</option></select><Button variant="outline" :disabled="!tasks.length" @click="exportExceptionView" :title="l('导出当前筛选的全部异常，不受分页影响','Export all matching issues across every page')"><Download :size="15"/>{{l('导出异常 Excel','Export exceptions to Excel')}}</Button><small>{{tasks.length}} {{l('条异常','issues')}}</small></div>
+    <p v-if="exceptionExportNotice" class="ops-note" role="status">{{exceptionExportNotice}}</p><p v-if="exceptionExportError" class="ops-error" role="alert">{{exceptionExportError}}</p>
     <section class="ops-panel ops-scroll"><table class="ops-case-table"><thead><tr><th>{{l('问题与比对摘要','Issue & comparison')}}</th><th>PO / {{l('行','item')}}</th><th>{{l('责任人／期限','Owner / due')}}</th><th>{{l('状态','Status')}}</th><th>{{l('下一步','Next action')}}</th></tr></thead><tbody><tr v-for="c in pagedTasks" :key="c.id"><td><b>{{tr(c.title)}}</b><small>{{c.userEntered?c.detail:tr(c.detail)}}</small><small v-if="c.note">{{c.noteUserEntered||c.rule?c.note:tr(c.note)}}</small></td><td><button class="ops-link" @click="open(c.order,view==='data'?'overview':'activity')">{{order(c.order)?.po}}</button><small>{{order(c.order)?.item}}</small></td><td>{{c.owner}}<small :class="{'ops-amber':c.due<TODAY&&c.status!=='已解决'}">{{c.due}}</small></td><td><Badge :theme="c.status==='已解决'?'green':c.priority==='高'?'orange':'gray'">{{tr(c.status)}}</Badge></td><td><Button v-if="c.status!=='已解决'" variant="outline" @click="emit('review',c)">{{l(role==='buyer'?'核对与处理':'查看与跟进',role==='buyer'?'Review & act':'View & follow up')}}</Button><Button v-else variant="ghost" @click="open(c.order,'activity')">{{l('查看依据','View evidence')}}</Button></td></tr><tr v-if="!tasks.length"><td colspan="5" class="ops-empty"><CheckCheck :size="24"/>{{l('当前筛选下没有待显示的事项','No tasks match this view')}}</td></tr></tbody></table></section>
     <details v-if="view==='data'" class="ops-definitions" open><summary>{{l('字段归属与初始化规则','Field ownership & initialization')}}</summary><div class="ops-ownership"><div><b>SAP</b><p>{{l('正式 PO／SO、订购数量、价格、单位、发货及收货过账。保留原值和同步时间。','Formal PO/SO, ordered quantities, prices, units, PGI and receipts. Original values and sync times are retained.')}}</p></div><div><b>{{l('协作平台','Collaboration platform')}}</b><p>{{l('承诺、国内 ETA、业务报发、装载位置、备注、异常处理。SAP 同步不覆盖这些协作记录。','Commitments, China ETA, dispatch reports, loading positions, notes and issue handling. SAP sync does not overwrite these records.')}}</p></div><div><b>{{l('Excel 初始化','Excel initialization')}}</b><p>{{l('首次导入保留文件行号和原值，后续协作在平台维护。','Initial import retains source rows and originals; ongoing collaboration is maintained in the platform.')}}</p></div></div><p v-if="!imported">{{l('模拟快照只为示例批次 SHP-DEMO-003 补充 SAP 过账；不会把新登记的报发自动当作 SAP 发货。正式环境需要内网同步服务。','The demo snapshot supplies PGI only for SHP-DEMO-003. New dispatch reports are never automatically treated as SAP PGI. Production requires an internal sync service.')}}</p></details>
   </template>

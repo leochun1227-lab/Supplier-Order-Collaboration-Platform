@@ -1,8 +1,10 @@
-# Regent Supplier Order Collaboration — UI prototype
+# Regent Supplier Order Collaboration
 
 Interactive Chinese/English prototype using **Frappe UI 0.1.278**, Vue 3 and Vite. It uses the real Frappe UI Button, Badge and Dialog components, with a bespoke procurement workspace.
 
-This is a frontend demonstration, not an installed Frappe Framework / ERPNext backend. All records are fictional. The role selector demonstrates supplier scoping; it is not authentication or a security boundary. State exists only in memory and resets on page refresh. No SAP, Excel, MES or logistics integration is connected.
+Current public-test mode loads 1,253 imported ledger records from Firebase and persists collaboration changes there. It uses Frappe UI components, not an installed Frappe Framework / ERPNext backend. Firebase currently uses the public read/write rules explicitly selected for testing; supplier authentication is not yet enabled.
+
+**Deployment:** [Render website and Windows SAP sync instructions](docs/RENDER-SAP-SETUP.md). Render uses `npm ci && npm run build` and publishes `dist`. On a separate Windows computer, run `setup-sap-sync.bat` once, then schedule `run.bat` twice daily. The Python sync publishes read-only SAP raw snapshots separately; it does not yet project those snapshots into the order workbench. No task is created automatically.
 
 ## Run
 
@@ -17,7 +19,7 @@ npm run build
 
 Use the 中文 / English control beside the preview badge to switch the entire interface. It covers all seven pages, dialogs, status labels, feedback, sample record descriptions, dates and CSV headers. The language preference is stored locally; switching does not reload or reset orders, filters or drafts. User-entered notes, comments and locations stay in their original language. Select values and status codes remain language-independent. English and Chinese interface text uses the shared reactive `src/i18n.mjs` layer with translation keys or explicit bilingual message objects.
 
-The first page is a compact Overview, followed by the order workbench. The current preview models source reconciliation using fictional examples inspired by the business workflow. It does not contain the private spreadsheets, SAP extracts, credentials, or real reconciliation findings. Those local analysis files remain under ignored `outputs/`.
+The first page is a compact Overview, followed by the order workbench. The current public-test workspace loads real imported records from Firebase. Seed fixtures remain for tests. Spreadsheet and SAP data are not bundled into the static build; local extraction files stay under ignored `outputs/`, and credentials under ignored `secrets/`.
 
 The working surfaces in `src/Operations.vue` include:
 

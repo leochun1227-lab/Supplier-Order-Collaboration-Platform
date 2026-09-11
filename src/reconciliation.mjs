@@ -55,7 +55,7 @@ export const groupLabel=groups=>Object.entries(groups).map(([u,q])=>`${q.toLocal
 export function factsFor(o,shipments){
   const related=relatedShipments(o,shipments)
   return [
-    {field:label('物料编码','Material'),sap:o.sapPart||o.part,business:o.soPart||o.part,source:label('工厂 SO／平台','Factory SO / platform'),adopted:mappingReady(o)?label('对应关系已确认','Mapping confirmed'):label('双方原值保留','Both originals retained')},
+    {field:label('物料编码','Material'),sap:o.sapPart||'—',business:o.soPart??o.part??'—',source:label('工厂 SO／平台','Factory SO / platform'),adopted:mappingReady(o)?label('对应关系已确认','Mapping confirmed'):label('双方原值保留','Both originals retained')},
     {field:label('计量单位','Unit'),sap:o.unit||'EA',business:o.soUnit||o.unit||'EA',source:label('工厂 SO','Factory SO'),adopted:o.mapping?`1 ${o.soUnit} = ${o.mapping.factor} ${o.unit}`:label('按原单位展示','Shown in original units')},
     {field:label('发运数量','Dispatched quantity'),sap:`${o.shipped??'—'} ${o.unit||'EA'}`,business:`${reportedQty(o)} ${o.unit||'EA'}`,source:o.cooperationSource||label('平台','Platform'),adopted:label('分别保留报发与过账','Report and PGI kept separately')},
     {field:label('PO 单价','PO unit price'),sap:`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit||'EA'}`,business:'—',source:'SAP PO',adopted:priceReady(o)?label('纳入已确认货值','Included in confirmed value'):label('暂不计入货值','Excluded from confirmed value')},
@@ -67,6 +67,7 @@ export function detectChecks(orders,shipments,today=TODAY){
   const add=(o,kind,evidence,priority='中')=>found.push({id:`CHECK-${o.id}-${kind}`,order:o.id,kind,category:'数据问题',title:KINDS[kind],detail:evidence,owner:o.buyer,priority,due:today,status:'待处理',note:'',fingerprint:JSON.stringify([kind,evidence]),rule:true})
   for(const o of orders){
     if(o.imported){
+      if(o.workbookIdentityChanged&&!mappingReady(o))add(o,'material',`${o.sapPart||'—'} / ${o.unit} ↔ ${o.soPart||'—'} / ${o.soUnit}`)
       if(openQty(o)<=0)continue
       if(o.importChecks?.length)add(o,'initialization',o.importChecks.map(c=>`${c.title.zh} / ${c.title.en}`).join('; '))
       if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit}`)

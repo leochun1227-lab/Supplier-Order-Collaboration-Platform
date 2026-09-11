@@ -18,7 +18,7 @@ export async function connectCloud(email,password,onChange,onError){
   try{
     const member=(await get(ref(db,`${ROOT}/members/${auth.currentUser.uid}`))).val()
     // Pilot access is internal-only. Supplier access needs a supplier-scoped source projection.
-    if(member?.role!=='buyer'||!member.workspace||/[.#$\[\]/]/.test(member.workspace))throw new Error('membership_required')
+    if(member?.role!=='buyer'||!member.workspace||/[.#$[\]/]/.test(member.workspace))throw new Error('membership_required')
     const base=`${ROOT}/workspaces/${member.workspace}`
     let source=(await get(ref(db,`${base}/source`))).val()
     if(source?.kind!=='demo'||source?.schemaVersion!==1)throw new Error('source_not_ready')
