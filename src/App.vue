@@ -25,7 +25,7 @@ const orders=ref(workspaceOrders()), issues=ref(seedIssues().filter(i=>i.id!=='E
 const checks=ref(reconcile(orders.value,shipments.value.filter(s=>!s.deletedAt))), synced=ref(false),reviewOpen=ref(false),reviewCase=ref(null),dispatchOpen=ref(false),dispatchSelected=ref(null)
 const allIssues=computed(()=>[...issues.value,...checks.value])
 watch([orders,shipments],()=>{checks.value=reconcile(orders.value,shipments.value.filter(s=>!s.deletedAt),checks.value)}, {deep:true})
-const page=ref('parts'), role=ref('buyer'), query=ref(''), filter=ref('open'), type=ref('全部类型'), mode=ref('全部运输'), buyer=ref('全部采购员')
+const page=ref('overview'), role=ref('buyer'), query=ref(''), filter=ref('open'), type=ref('全部类型'), mode=ref('全部运输'), buyer=ref('全部采购员')
 const overviewSelection=ref(null)
 const selected=ref(null), detailOpen=ref(false), detailTab=ref('overview'), modal=ref(''), modalOpen=ref(false), error=ref(''), notice=ref(''), sidebar=ref(false)
 const comment=ref(''), response=ref('confirm'), batches=ref([]), reason=ref(''), issueStatus=ref('处理中'), activeIssue=ref(null), activeShipment=ref(null), shipmentStage=ref(2), shipmentLocation=ref(''), shipmentEta=ref('')
