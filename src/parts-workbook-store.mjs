@@ -12,17 +12,18 @@ export function createPartsWorkbookStore({ fetcher = fetch, databaseURL = PUBLIC
     if (!data || data.schemaVersion !== 1 || typeof data.bookJson !== 'string') throw new Error('invalid_workbook')
     const book = JSON.parse(data.bookJson)
     if (!book.sheets?.length) throw new Error('invalid_workbook')
-    return { book, revision: data.revision, savedAt: data.savedAt, operationId: data.operationId, etag }
+    return { book, revision: data.revision, savedAt: data.savedAt, operationId: data.operationId, etag, backupBook: data.previousBookJson ? JSON.parse(data.previousBookJson) : null }
   }
   async function load() {
     const response = await request({ headers: { 'X-Firebase-ETag': 'true' } })
     const data = await response.json()
     return data === null ? { book: null, revision: 0, etag: response.headers.get('etag') } : packet(data, response.headers.get('etag'))
   }
-  async function save(book, base) {
+  async function save(book, base, backupBook = base.backupBook) {
     if (!base.etag) throw new Error('missing_etag')
     const operationId = crypto.randomUUID()
     const body = { schemaVersion: 1, revision: base.revision + 1, operationId, savedAt: { '.sv': 'timestamp' }, bookJson: JSON.stringify(book) }
+    if (backupBook) body.previousBookJson = JSON.stringify(backupBook)
     try {
       await request({ method: 'PUT', headers: { 'Content-Type': 'application/json', 'If-Match': base.etag }, body: JSON.stringify(body) })
     } catch (error) {
@@ -40,5 +41,7 @@ export function createPartsWorkbookStore({ fetcher = fetch, databaseURL = PUBLIC
     if (current.book) return current
     try { return await save(seed, current) } catch (error) { if (error.message === 'save_conflict') return load(); throw error }
   }
-  return { load, save, initialize }
+  // Backup and replacement share one conditional write: no partially replaced workbook.
+  async function replace(book, base) { return save(book, base, base.book) }
+  return { load, save, initialize, replace }
 }

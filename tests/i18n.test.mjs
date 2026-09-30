@@ -22,6 +22,7 @@ const wrapper={setup:(_,ctx)=>()=>Vue.h('div',ctx.slots.default?.())}
 const dialog={props:['modelValue','options'],setup:(p,ctx)=>()=>p.modelValue?Vue.h('section',[p.options.title,ctx.slots['body-content']?.(),ctx.slots.actions?.()]):null}
 let cloudFactory=async()=>{throw new Error('No Firebase network calls in SSR tests')}
 let exceptionDownload=()=>{throw new Error('No downloads in SSR tests')}
+let workbookStoreFactory=(...args)=>partsWorkbookStore.createPartsWorkbookStore(...args)
 function component(file, expose=''){
   let source=fs.readFileSync(new URL('../src/'+file,import.meta.url),'utf8')
   if(expose)source=source.replace('</script>',`\ndefineExpose({${expose}})\n</script>`)
@@ -30,7 +31,7 @@ function component(file, expose=''){
   const imports={vue:Vue,'./sap-reference.mjs':sapReference,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
     './exception-export.mjs':{downloadExceptions:(...args)=>exceptionDownload(...args)},
     './parts-workbook-download.mjs':{createPartsExportWorker(){throw new Error('No downloads in SSR tests')}},
-    './parts-workbook.mjs':partsWorkbook,'./parts-workbook-store.mjs':partsWorkbookStore,
+    './parts-workbook.mjs':partsWorkbook,'./parts-workbook-store.mjs':{...partsWorkbookStore,createPartsWorkbookStore:(...args)=>workbookStoreFactory(...args)},
     './persistence.mjs':persistence,'./firebase-store.mjs':{cloudConfigured:false,connectCloud:(...args)=>cloudFactory(...args)},
     './runtime-config.mjs':{publicTestEnabled:false},'./public-firebase-store.mjs':{connectPublicWorkspace:async()=>{throw new Error('No public Firebase calls in SSR tests')}},
     'frappe-ui':{Button:wrapper,Badge:wrapper,Dialog:dialog},'lucide-vue-next':new Proxy({},{get:()=>icon})}
@@ -505,4 +506,72 @@ test('history pagination reaches final records and respects the selected page si
   state.pageSize.value=100;state.goToPage(999)
   assert.equal(state.pageNumber.value,13);assert.equal(state.pagedRows.value.length,53);assert.equal(state.pagedRows.value.at(-1).id,'history-1252')
   state.goToPage(-5);assert.equal(state.pageNumber.value,1);assert.equal(state.pagedRows.value.length,100)
+})
+
+
+test('column visibility preserves merged titles, stable identities and local preferences without saving data',async()=>{
+  const source=JSON.parse(fs.readFileSync(new URL('../public/parts-workbook.json',import.meta.url),'utf8'))
+  const before=JSON.stringify(source)
+  const Parts=component('PartsWorkbook.vue','book,loading,visibleColumns,headerCells,setColumnVisible,showAllColumns,hiddenColumnCount,hiddenColumns,readColumnPreferences,active,switchSheet,dirty')
+  const storage=new Map(), previous=globalThis.localStorage
+  globalThis.localStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)}
+  try {
+    const View={...Parts,setup(props,ctx){return Parts.setup(props,{...ctx,expose(s){
+      s.book.value=source;s.loading.value=false
+      s.active.value={rowId:source.sheets[0].rows[3].id,col:0}
+      s.setColumnVisible(0,false);s.setColumnVisible(2,false)
+      assert.equal(s.active.value,null)
+      assert.equal(s.visibleColumns.value.length,25)
+      assert.equal(s.headerCells.value[0][0].cols,25)
+      assert.equal(s.headerCells.value[0][0].c,0,'merged title still uses its original cell')
+      s.hiddenColumns.value={};s.readColumnPreferences()
+      assert.equal(s.hiddenColumnCount.value,2,'reload restores local preferences')
+      s.switchSheet('s1');assert.equal(s.visibleColumns.value.length,15)
+      s.switchSheet('s0');assert.equal(s.hiddenColumnCount.value,2)
+      assert.equal(s.dirty.value,false)
+      assert.equal(JSON.stringify(source),before)
+    }})}}
+    const html=await renderToString(Vue.createSSRApp(View))
+    assert.match(html,/colspan="25"/)
+    assert.match(html,/备品备件总表（9.4）Parts order list/)
+    assert.equal((html.match(/class="pw-resize-column"/g)||[]).length,25)
+    assert.doesNotMatch(html,/class="pw-resize-column"[^>]*aria-label="(?:调整列宽 |Resize column )A"/)
+    const Guard={...Parts,setup(props,ctx){return Parts.setup(props,{...ctx,expose(s){
+      s.book.value=source;s.loading.value=false
+      for(let c=0;c<27;c++)s.setColumnVisible(c,false)
+      assert.equal(s.visibleColumns.value.length,1,'at least one column remains visible')
+      s.showAllColumns();assert.equal(s.visibleColumns.value.length,27)
+      assert.equal(s.dirty.value,false)
+    }})}}
+    await renderToString(Vue.createSSRApp(Guard))
+  } finally {if(previous===undefined)delete globalThis.localStorage;else globalThis.localStorage=previous}
+})
+
+
+test('Excel replacement dialog keeps old data on failure, requires conflict review, and only accepts an acknowledged replacement',async()=>{
+  const current={sourceFile:'old.xlsx',sheets:[{id:'s0',name:'Old',headerRows:1,originalRows:2,originalColumns:4,merges:[],columns:[0,1,2,3].map(c=>({id:'s0-c'+c})),rows:[['Purchase Order','Line No','Stockcode','Qty'],['OLD','0010','OLD',10]].map((cells,r)=>({id:'s0-r'+(r+1),cells,formulas:{},types:{}}))}]}
+  const candidate=structuredClone(current);candidate.sourceFile='latest.xlsx';candidate.mainSheetId='s0';candidate.sheets[0].name='New';candidate.sheets[0].rows[1].cells=['NEW','0010','NEW',20]
+  const original=JSON.stringify(current),factory=workbookStoreFactory
+  let shouldFail=true,writes=0,packet={book:current,revision:4,etag:'v4'},state
+  workbookStoreFactory=()=>({
+    load:async()=>packet,
+    replace:async(book,base)=>{writes++;assert.equal(base.revision,4);if(shouldFail)throw new Error('save_conflict');packet={book,backupBook:current,revision:5,etag:'v5'};return packet}
+  })
+  try {
+    const Parts=component('PartsWorkbook.vue','book,base,loading,importOpen,importPreview,importValid,importError,importConflict,importNotice,confirmImport,refreshImportBase,dirty,active,undo,filters')
+    const View={...Parts,setup(props,ctx){return Parts.setup(props,{...ctx,expose(s){state=s;s.book.value=current;s.base.value=packet;s.loading.value=false;s.importOpen.value=true;s.importPreview.value={book:candidate}}})}}
+    const html=await renderToString(Vue.createSSRApp(View))
+    assert.match(html,/latest.xlsx/);assert.match(html,/Replace all and save|确认完整替换并保存/)
+    assert.equal(state.importValid.value,true)
+    assert.equal(writes,0,'preview does not save anything')
+    await state.confirmImport()
+    assert.equal(state.book.value,current);assert.equal(JSON.stringify(current),original);assert.equal(state.importOpen.value,true);assert.equal(state.importConflict.value,true)
+    await state.confirmImport();assert.equal(writes,1,'conflict blocks a blind retry')
+    await state.refreshImportBase();shouldFail=false
+    await state.confirmImport()
+    assert.equal(state.book.value.sourceFile,'latest.xlsx');assert.equal(state.base.value.backupBook.sourceFile,'old.xlsx')
+    assert.ok(state.book.value.importId);assert.equal(state.book.value.sheets[0].fieldColumns.material,'s0-c2')
+    assert.equal(state.importOpen.value,false);assert.equal(state.dirty.value,false);assert.deepEqual(state.undo.value,[])
+    assert.match(state.importNotice.value,/latest.xlsx/)
+  } finally {workbookStoreFactory=factory}
 })

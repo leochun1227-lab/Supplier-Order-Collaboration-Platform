@@ -1,4 +1,46 @@
 export const cloneBook = value => JSON.parse(JSON.stringify(value))
+export const PARTS_FIELDS = ['seq','mode','po','line','van','description_zh','description_en','supplier_reference','material','qty','category','so','buyer','ordered','agreed_etd','planned_etd','manager','eta_china','actual_ship','shipped','remaining','loaded_van','location','container','awb','completion','notes']
+const headerAliases = [
+  ['序号No.','序号','No.'],['属性Attribute','属性','Attribute','运输方式'],['订单号Purchase Order','订单号','Purchase Order','PO'],['Line No','行号','订单行','PO Item'],
+  ['车架号Van number:','车架号','Van number'],['物品名称Description','物品名称','中文名称'],['Description','英文名称'],['供应商Supplier（历史来料数据 仅供参考）','供应商Supplier','供应商','Supplier'],
+  ['SAP料号Stockcode','SAP料号','Stockcode','Material','料号'],['需求数量Qty','需求数量','Qty','Quantity'],['分类Category','分类','Category'],['销售凭证Sales Doc','销售凭证','Sales Doc'],
+  ['订货人Order By','订货人','Order By'],['订货时间Order Date','订货时间','Order Date'],['约定发运时间Agreed ETD','约定发运时间','Agreed ETD'],['计划发运时间ETD','计划发运时间','ETD'],
+  ['采购经理Purchase Manager','采购经理','Purchase Manager'],['计划到货时间（采购提供的到货时间）ETA China','计划到货时间ETA China','计划到货时间','ETA China'],
+  ['实际发运时间Actual Ship Date','实际发运时间','Actual Ship Date'],['实发数量Shipped Qty','实发数量','Shipped Qty'],['剩余未发数量Remaining Qty','剩余未发数量','Remaining Qty'],
+  ['海运车架号VAN(Container)','海运车架号','VAN(Container)'],['位置Location','位置','Location'],['集装箱号Container No.','集装箱号','Container No.'],['空运单号AWB No.','空运单号','AWB No.'],
+  ['评价Completion Status','评价','Completion Status'],['备注Remarks','备注','Remarks']
+]
+const normalizeHeader = value => String(value??'').toLowerCase().replace(/[\s\p{P}\p{S}]/gu,'')
+export function partsHeaderMapping(sheet,headerRows) {
+  const columns={},duplicates=[]
+  const row=sheet?.rows[headerRows-1]
+  if(row)row.cells.forEach((value,c)=>{
+    const key=normalizeHeader(value), index=headerAliases.findIndex(aliases=>aliases.some(alias=>normalizeHeader(alias)===key))
+    if(!key||index<0)return
+    const field=PARTS_FIELDS[index]
+    if(columns[field])duplicates.push(field)
+    columns[field]=sheet.columns[c].id
+  })
+  const missing=['po','line','material','qty'].filter(field=>!columns[field])
+  return {columns,missing,duplicates,score:Object.keys(columns).length,valid:!missing.length&&!duplicates.length}
+}
+export function preparePartsReplacement(book,importId) {
+  const result=cloneBook(book)
+  result.importId=importId;result.importedAt=new Date().toISOString()
+  for(const sheet of result.sheets) {
+    sheet.fieldColumns=partsHeaderMapping(sheet,sheet.headerRows).columns
+    const positions=new Map(sheet.columns.map((col,c)=>[col.id,c])),keys=new Map()
+    for(const row of sheet.rows.slice(sheet.headerRows)) {
+      const fields=['po','line','material'].map(field=>String(row.cells[positions.get(sheet.fieldColumns[field])]??'').trim())
+      row.importKey=fields.every(value=>value&&!['/','—','-'].includes(value))?JSON.stringify(fields):null
+      if(row.importKey)keys.set(row.importKey,(keys.get(row.importKey)||0)+1)
+    }
+    // Ambiguous source identities must not acquire a match later just because a
+    // duplicate row is removed. Anchors survive subsequent edits and row movement.
+    for(const row of sheet.rows.slice(sheet.headerRows))if(keys.get(row.importKey)>1)row.importKey=null
+  }
+  return result
+}
 export const dimensionLimits = {column:{min:48,max:1200},row:{min:24,max:546}}
 export function setDimension(sheet, axis, id, pixels) {
   if (!dimensionLimits[axis]) throw new Error('invalid_dimension')
@@ -82,7 +124,7 @@ export function sheetValues(sheet) {
     visiting.add(key)
     let value
     try { value = calculate(formula, get); if (row.types[c] === 'date') value = serialDate(value) }
-    catch (error) { value = error.message === 'unsupported_formula' ? '#FORMULA!' : error.message }
+    catch (error) { value = error.message === 'unsupported_formula' ? (sheet.preserveFormulaCache ? row.cells[c] : '#FORMULA!') : error.message }
     visiting.delete(key); memo.set(key, value); return value
   }
   return sheet.rows.map((row, r) => row.cells.map((_, c) => get(r, c)))

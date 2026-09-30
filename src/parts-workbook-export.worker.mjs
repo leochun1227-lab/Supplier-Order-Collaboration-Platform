@@ -1,6 +1,13 @@
 import { buildPartsWorkbookXlsx } from './parts-workbook-export.mjs'
+import { parsePartsWorkbookXlsx, base64ToBytes } from './parts-workbook-import.mjs'
 self.onmessage=async({data})=>{
   try {
+    if (data.book.importTemplateBase64) {
+      const bytes=base64ToBytes(data.book.importTemplateBase64)
+      const {book:baseline}=await parsePartsWorkbookXlsx(bytes,data.book.sourceFile)
+      const result=buildPartsWorkbookXlsx(data.book,bytes,baseline)
+      self.postMessage({buffer:result.buffer},[result.buffer]);return
+    }
     const [templateResponse,baselineResponse]=await Promise.all([fetch('/parts-workbook-template.xlsx'),fetch('/parts-workbook.json')])
     if(!templateResponse.ok||!baselineResponse.ok)throw new Error('export_template_unavailable')
     const [buffer,baseline]=await Promise.all([templateResponse.arrayBuffer(),baselineResponse.json()])

@@ -51,12 +51,12 @@ function lookupFormula(formula,sheet) {
     return l<0||r<0?p+'#REF!'+end:p+a+columnName(l)+':'+b+columnName(r)+end
   })
 }
-function makeCell(address,style,value,formula,type) {
+function makeCell(address,style,value,formula,type,date1904=false) {
   const s=style?` s="${style}"`:''
   let content='',cellType=''
   if(formula)content=`<f>${escapeXml(formula.slice(1))}</f>`
   if(value!=null&&value!=='') {
-    if(type==='date'&&/^\d{4}-\d{2}-\d{2}$/.test(value))value=dateSerial(value)
+    if(type==='date'&&/^\d{4}-\d{2}-\d{2}$/.test(value))value=dateSerial(value)-(date1904?1462:0)
     if(typeof value==='number'&&Number.isFinite(value))content+=`<v>${value}</v>`
     else if(typeof value==='boolean'){cellType='b';content+=`<v>${value?1:0}</v>`}
     else if(formula&&String(value).startsWith('#')){cellType='e';const error=['#NULL!','#DIV/0!','#VALUE!','#REF!','#NAME?','#NUM!','#N/A'].includes(value)?value:'#VALUE!';content+=`<v>${error}</v>`}
@@ -93,7 +93,7 @@ function fillStyles(xml) {
   }
 }
 
-function exportSheet(xml,sheet,baseline,styles) {
+function exportSheet(xml,sheet,baseline,styles,date1904=false) {
   const template=readTemplateSheet(xml),values=sheetValues(sheet),baselineRows=new Map(baseline.rows.map(row=>[row.id,row]))
   const data=[]
   for(let r=0;r<sheet.rows.length;r++) {
@@ -108,17 +108,22 @@ function exportSheet(xml,sheet,baseline,styles) {
       const sourceCell=styleRow.cells.get(sourceAddress),address=columnName(c)+(r+1)
       const formula=row.formulas[c]
       const style=styles.style(sourceCell?attr(sourceCell,'s'):attr('<col'+originColStyle(template,styleCol)+'>','style'),cellFill(sheet,row,c))
+      // Array metadata belongs to its original range. Shared formulas are always
+      // expanded below so an edited anchor cannot invalidate untouched followers.
+      if(sourceCell&&/<f\b[^>]*t="array"/.test(sourceCell)&&formula&&origin===r+1&&oc===c&&formula===baseRow?.formulas[oc]&&Object.is(values[r][c],baseRow?.cells[oc])&&!cellFill(sheet,row,c)&&sheet.rows.every((item,i)=>item.id===baseline.rows[i]?.id)&&sheet.rows.length===baseline.rows.length&&sheet.columns.every((item,i)=>item.id===baseline.columns[i]?.id)&&sheet.columns.length===baseline.columns.length) {
+        cells.push(sourceCell);continue
+      }
       // Preserve original rich text, blank styles and native cell metadata verbatim.
       if(original&&oc!=null&&sourceCell&&!formula&&!baseRow?.formulas[oc]&&Object.is(row.cells[c],baseRow?.cells[oc])) {
         let cell=sourceCell.replace(/\br="[^"]*"/,`r="${address}"`)
         if (cellFill(sheet,row,c)) cell=cell.replace(/^<c\b[^>]*>/,tag=>`<c${setAttr(attributes(tag),'s',style)}${tag.endsWith('/>')?'/':''}>`)
         cells.push(cell);continue
       }
-      cells.push(makeCell(address,style,values[r][c],lookupFormula(formula||'',sheet),row.types[c]))
+      cells.push(makeCell(address,style,values[r][c],lookupFormula(formula||'',sheet),row.types[c],date1904))
     }
     data.push(`<row${rowAttrs}>${cells.join('')}</row>`)
   }
-  xml=xml.replace(/<sheetData\b[^>]*>[\s\S]*?<\/sheetData>/,`<sheetData>${data.join('')}</sheetData>`)
+  xml=xml.replace(/<sheetData\b[^>]*(?:\/>|>[\s\S]*?<\/sheetData>)/,`<sheetData>${data.join('')}</sheetData>`)
   const last=columnName(sheet.columns.length-1)+sheet.rows.length
   xml=xml.replace(/<dimension\b[^>]*\/>/,`<dimension ref="A1:${last}"/>`)
   if(!sheet.columns.every((col,c)=>col.id===baseline.columns[c]?.id)||sheet.columns.length!==baseline.columns.length||sheet.columns.some(col=>Number.isFinite(col.widthPx))) {
@@ -129,11 +134,11 @@ function exportSheet(xml,sheet,baseline,styles) {
       if (Number.isFinite(col.widthPx)) attrs=setAttr(setAttr(setAttr(attrs,'width',Math.round((col.widthPx-5)/7*256)/256),'customWidth',1),'bestFit',null)
       return `<col${attrs}/>`
     }).join('')
-    xml=xml.replace(/<cols>[\s\S]*?<\/cols>/,`<cols>${cols}</cols>`)
+    xml=/<cols\b/.test(xml)?xml.replace(/<cols\b[^>]*(?:\/>|>[\s\S]*?<\/cols>)/,`<cols>${cols}</cols>`):xml.replace('<sheetData',`<cols>${cols}</cols><sheetData`)
   }
   const merges=sheet.merges.length?`<mergeCells count="${sheet.merges.length}">${[...sheet.merges].sort((a,b)=>a.r-b.r||a.c-b.c).map(m=>`<mergeCell ref="${columnName(m.c)}${m.r+1}:${columnName(m.c+m.cols-1)}${m.r+m.rows}"/>`).join('')}</mergeCells>`:''
   if(/<mergeCells\b/.test(xml))xml=xml.replace(/<mergeCells\b[^>]*>[\s\S]*?<\/mergeCells>/,merges)
-  else if(merges)xml=xml.replace('<pageMargins',merges+'<pageMargins')
+  else if(merges)xml=xml.replace('</sheetData>','</sheetData>'+merges)
   // Export the whole workbook, independent of the current page's filters/sort.
   xml=xml.replace(/<autoFilter\b[^>]*(?:\/>|>[\s\S]*?<\/autoFilter>)/,`<autoFilter ref="A${sheet.headerRows}:${last}"/>`)
   xml=xml.replace(/<sortState\b[^>]*(?:\/>|>[\s\S]*?<\/sortState>)/g,'')
@@ -146,14 +151,21 @@ function exportSheet(xml,sheet,baseline,styles) {
 export function buildPartsWorkbookXlsx(book,templateBytes,baseline) {
   if(book.sourceHash!==baseline.sourceHash||book.sheets.length!==baseline.sheets.length)throw new Error('export_template_mismatch')
   const files=unzipSync(templateBytes)
-  const styles=fillStyles(strFromU8(files['xl/styles.xml']))
+  const defaultStyles='<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs></styleSheet>'
+  const stylesPath=baseline.stylesPath||'xl/styles.xml'
+  if(!files[stylesPath]) {
+    const relPath='xl/_rels/workbook.xml.rels',contentPath='[Content_Types].xml'
+    files[relPath]=strToU8(strFromU8(files[relPath]).replace('</Relationships>','<Relationship Id="partsExportStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'))
+    files[contentPath]=strToU8(strFromU8(files[contentPath]).replace('</Types>','<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'))
+  }
+  const styles=fillStyles(files[stylesPath]?strFromU8(files[stylesPath]):defaultStyles)
   for(let i=0;i<baseline.sheets.length;i++) {
-    const source=baseline.sheets[i],sheet=book.sheets.find(s=>s.id===source.id),path=`xl/worksheets/sheet${i+1}.xml`
+    const source=baseline.sheets[i],sheet=book.sheets.find(s=>s.id===source.id),path=source.sourcePath||`xl/worksheets/sheet${i+1}.xml`
     if(!sheet||!files[path]||!sheet.rows.length||!sheet.columns.length)throw new Error('export_template_mismatch')
     if(sheet.rows.length>1048576||sheet.columns.length>16384)throw new Error('export_excel_limit')
-    files[path]=strToU8(exportSheet(strFromU8(files[path]),sheet,source,styles))
+    files[path]=strToU8(exportSheet(strFromU8(files[path]),sheet,source,styles,!!book.date1904))
   }
-  files['xl/styles.xml']=strToU8(styles.xml())
+  files[stylesPath]=strToU8(styles.xml())
   let workbookXml=strFromU8(files['xl/workbook.xml'])
   workbookXml=workbookXml.replace(/<definedName\b[^>]*name="_xlnm\._FilterDatabase"[^>]*>[\s\S]*?<\/definedName>/g,tag=>{
     const sheet=book.sheets[Number(attr(tag,'localSheetId'))]

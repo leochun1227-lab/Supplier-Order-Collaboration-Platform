@@ -1,8 +1,8 @@
-import { cloneBook, sheetValues } from './parts-workbook.mjs'
+import { cloneBook, sheetValues, PARTS_FIELDS } from './parts-workbook.mjs'
 import { hydrateState } from './persistence.mjs'
 
 // Column IDs and original evidence row IDs survive renames, sorting and insertion.
-const FIELDS = ['seq','mode','po','line','van','description_zh','description_en','supplier_reference','material','qty','category','so','buyer','ordered','agreed_etd','planned_etd','manager','eta_china','actual_ship','shipped','remaining','loaded_van','location','container','awb','completion','notes']
+const FIELDS = PARTS_FIELDS
 const text = v => v == null || ['/', '—', '-'].includes(String(v).trim()) ? '' : String(v).trim()
 const number = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null
 const date = v => /^\d{4}-\d{2}-\d{2}/.test(text(v)) ? text(v).slice(0,10) : ''
@@ -32,10 +32,24 @@ function dispatch(order, fields) {
 
 export function workbookProjection(source, book) {
   const original = cloneBook(source), baseline = {orders:{},shipments:{}}, changed = {orders:{},shipments:{}}, hidden = new Set()
-  const sheet = book?.sheets.find(s=>s.id==='s0')
+  const sheet = book?.sheets.find(s=>s.id===(book.mainSheetId||'s0'))
   if (!sheet) return {source:original,baseline,changed,hidden}
+  baseline.importId=book.importId||null
   const values = sheetValues(sheet), byRow = new Map()
-  for (const order of original.orders) {
+  const replacement=!!book.importId
+  if(replacement) {
+    // A new file has new row positions. Reuse an existing identity only when the
+    // business key is complete and unique on BOTH sides; never link by row number.
+    const key=f=>[f.po,f.line,f.material].every(v=>text(v))?JSON.stringify([text(f.po),text(f.line),text(f.material)]):null
+    const sourceKeys=new Map(),targetKeys=new Map(),positions=new Map(sheet.columns.map((col,c)=>[col.id,c]))
+    for(const order of original.orders){hidden.add(order.id);const k=key(order.importFields||{});if(k)sourceKeys.set(k,sourceKeys.has(k)?null:order)}
+    for(let r=sheet.headerRows;r<sheet.rows.length;r++){
+      const row=sheet.rows[r],f=Object.fromEntries(['po','line','material'].map(field=>[field,values[r][positions.get(sheet.fieldColumns?.[field])]])),k=Object.hasOwn(row,'importKey')?row.importKey:key(f)
+      if(k)targetKeys.set(k,targetKeys.has(k)?null:sheet.rows[r].id)
+    }
+    for(const [k,rowId] of targetKeys)if(rowId&&sourceKeys.get(k))byRow.set(rowId,sourceKeys.get(k))
+  }
+  for (const order of replacement?[]:original.orders) {
     const evidence = order.importEvidence?.find(e=>e.file===book.sourceFile&&e.sheet===sheet.name)
     if (!evidence) continue
     const rowId = `s0-r${evidence.row}`
@@ -47,14 +61,14 @@ export function workbookProjection(source, book) {
   for (let r=sheet.headerRows;r<sheet.rows.length;r++) {
     const row = sheet.rows[r], old = byRow.get(row.id), f = {}, differences = new Set()
     for (let c=0;c<FIELDS.length;c++) {
-      const position = columns.get(`s0-c${c}`), field = FIELDS[c]
+      const field = FIELDS[c], position = columns.get(replacement?sheet.fieldColumns?.[field]:`s0-c${c}`)
       f[field] = position === undefined ? null : values[r][position]
-      if (!old || !same(normal(f[field]),normal(old.importFields?.[field]))) differences.add(field)
+      if (replacement || !old || !same(normal(f[field]),normal(old.importFields?.[field]))) differences.add(field)
     }
     const extras = sheet.columns.flatMap((col,c)=>/^s0-c\d+$/.test(col.id)?[]:[{id:col.id,name:String(values[sheet.headerRows-1]?.[c]||''),value:values[r][c]}])
     // A newly inserted blank row is a draft, not an invented business order.
     if (!old && !FIELDS.slice(1).some(k=>text(f[k])) && !extras.some(e=>text(e.value))) continue
-    const order = old || newOrder(`PARTS-${row.id}`), isNew = !old
+    const order = old || newOrder(`PARTS-${replacement?book.importId+'-':''}${row.id}`), isNew = !old
     hidden.delete(order.id)
     const has = (...keys)=>keys.some(k=>differences.has(k))
     const set = (field,value,...keys)=>{if(isNew||has(...keys))order[field]=value}
@@ -87,7 +101,7 @@ export function workbookProjection(source, book) {
     for (const [key,value] of Object.entries(candidates)) if(isNew||flags[key])order[key]=value
     order.workbookRowId=row.id; order.workbookRow=r+1; order.workbookExtras=extras
     order.importFields=f
-    if(isNew) order.importEvidence=[{file:book.sourceFile,sheet:sheet.name,row:r+1}]
+    if(isNew||replacement) order.importEvidence=[{file:book.sourceFile,sheet:sheet.name,row:r+1}]
     if(differences.size)order.cooperationSource={zh:'表格维护／平台联动',en:'Workbook / shared workspace'}
     linked.push(order)
     const shipmentId=`IMP-${order.id}`, existing=original.shipments.find(s=>s.id===shipmentId)
@@ -113,7 +127,7 @@ export function sharedWorkbookState(source, overlay={}, book=null, previousBasel
   // made against this workbook remain effective, including after reload or undo.
   for(const group of ['orders','shipments']) for(const row of state[group]) {
     for(const [key,value] of Object.entries(projection.baseline[group][row.id]||{})) {
-      const old=previousBaseline?.[group]?.[row.id]
+      const old=previousBaseline?.importId===projection.baseline.importId?previousBaseline?.[group]?.[row.id]:null
       if(old ? !same(old[key],value) : projection.changed[group][row.id]?.[key]) {
         row[key]=cloneBook(value)
         if(key==='so')delete row.referenceEvidence

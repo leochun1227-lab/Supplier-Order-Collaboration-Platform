@@ -17,7 +17,7 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
   const compose=()=>sharedWorkbookState(data,latest.stateJson?JSON.parse(latest.stateJson):{},workbook,latest.workbookBaseline)
   function deliver(){
     const {state}=compose(), summary={...source.summary}
-    if(workbook){summary.masterRecords=state.orders.length;summary.masterCompletion={NG:0,OK:0,'澳洲取消订单':0};for(const o of state.orders){const key=o.cancelled?'澳洲取消订单':o.importCompletion||'NG';summary.masterCompletion[key]=(summary.masterCompletion[key]||0)+1};summary.workbookSheets=workbook.sheets.filter(s=>s.id!=='s0').map(s=>({name:s.name,values:sheetValues(s)}));summary.workbookRevision=workbookRevision}
+    if(workbook){summary.masterRecords=state.orders.length;summary.masterCompletion={NG:0,OK:0,'澳洲取消订单':0};for(const o of state.orders){const key=o.cancelled?'澳洲取消订单':o.importCompletion||'NG';summary.masterCompletion[key]=(summary.masterCompletion[key]||0)+1};summary.workbookSheets=workbook.sheets.filter(s=>s.id!==(workbook.mainSheetId||'s0')).map(s=>({name:s.name,values:sheetValues(s)}));summary.workbookRevision=workbookRevision}
     onChange({state,revision,generation:source.generation,savedAt:Math.max(latest.at||0,workbookSavedAt||0)||null,email:'Public test',summary,workbookRevision})
   }
   async function refresh(){

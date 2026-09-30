@@ -1,11 +1,11 @@
 <script setup>
 import { computed, ref, shallowRef, onMounted, onUnmounted, onDeactivated, watch, nextTick } from 'vue'
-import { Table2, Search, Plus, Trash2, Undo2, Redo2, Filter, RefreshCw, CloudCheck, LoaderCircle, ArrowDown, ArrowUp, X, Columns3, Download, PaintBucket, Check } from 'lucide-vue-next'
+import { Table2, Search, Plus, Trash2, Undo2, Redo2, Filter, RefreshCw, CloudCheck, LoaderCircle, ArrowDown, ArrowUp, X, Columns3, Download, Upload, PaintBucket, Check } from 'lucide-vue-next'
 import { Dialog } from 'frappe-ui'
 import { language } from './i18n.mjs'
-import { cloneBook, columnName, sheetValues, setCell, insertRow, deleteRows, insertColumn, deleteColumn, filteredRows, externalFormula, cellFill, setCellFill, setDimension, dimensionLimits } from './parts-workbook.mjs'
+import { cloneBook, columnName, sheetValues, setCell, insertRow, deleteRows, insertColumn, deleteColumn, filteredRows, externalFormula, cellFill, setCellFill, setDimension, dimensionLimits, partsHeaderMapping, preparePartsReplacement } from './parts-workbook.mjs'
 import { createPartsWorkbookStore } from './parts-workbook-store.mjs'
-import { createPartsExportWorker } from './parts-workbook-download.mjs'
+import { createPartsExportWorker, createPartsImportWorker } from './parts-workbook-download.mjs'
 const emit=defineEmits(['saved'])
 
 const tx = (zh, en) => language.value === 'en' ? en : zh
@@ -85,7 +85,123 @@ function rowStyle(row) { const size = rowSize(row); return size ? {'--pw-row-hei
 const exporting=ref(false),exportError=ref(''),exportNotice=ref('')
 let exportWorker,exportTimeout
 let saveTimer, pollTimer, stopped = false, generation = 0
+const importInput=ref(null), importOpen=ref(false), importParsing=ref(false), importSaving=ref(false), importPreview=ref(null), importError=ref(''), importNotice=ref(''), importRestore=ref(false), importConflict=ref(false)
+let importWorker,importTimeout,importRequest=0,importAttempt=null
+const importMainSheet=computed(()=>importPreview.value?.book.sheets.find(s=>s.id===(importPreview.value.book.mainSheetId||'s0')))
+const importMapping=computed(()=>partsHeaderMapping(importMainSheet.value,importMainSheet.value?.headerRows))
+const importValid=computed(()=>!!importPreview.value&&(importRestore.value||importMapping.value.valid)&&importPreview.value.book.sheets.every(s=>Number.isInteger(s.headerRows)&&s.headerRows>=1&&s.headerRows<=s.rows.length))
+function importErrorText(e) {
+  return ({import_xlsx_only:tx('请选择 .xlsx 文件；旧版 .xls 或带宏文件请先另存为 .xlsx。','Choose an .xlsx file. Save legacy .xls or macro workbooks as .xlsx first.'),
+    import_file_limit:tx('文件过大：请选择 10 MB 以内的 Excel 文件。','Choose an Excel file up to 10 MB.'),
+    import_grid_limit:tx('文件超出导入范围：最多 30 个工作表、每表 20,000 行和 256 列、总计 500,000 个单元格。','Import supports up to 30 sheets, 20,000 rows and 256 columns per sheet, and 500,000 cells in total.'),
+    import_invalid_excel:tx('无法读取此 Excel 文件，请在 Excel 中打开并重新另存为 .xlsx 后重试。','Could not read this workbook. Open it in Excel and save it as .xlsx, then retry.'),
+    import_timeout:tx('读取文件超时，请缩小文件后重试。','Reading timed out. Try a smaller file.'),
+    save_conflict:tx('预览期间云端总表已更新。请先载入最新版本，再核对替换范围。','The cloud workbook changed during preview. Load the latest version, then review the replacement again.')})[e.message]||tx('未能完成读取或确认保存结果。当前页面保留原表；如已提交保存，请载入最新云端版本核对。','Could not read the file or confirm the save. The current view is retained; if a save was submitted, load the latest cloud version to check its outcome.')
+}
+async function beginImport() {
+  if(importParsing.value||importSaving.value||saving.value||!commit())return
+  if(dirty.value)await save()
+  if(dirty.value||conflict.value)return
+  importInput.value?.click()
+}
+async function readImportFile(event) {
+  const file=event.target.files?.[0];event.target.value=''
+  if(!file)return
+  if(!/\.xlsx$/i.test(file.name)||file.size>10*1024*1024){importError.value=importErrorText(new Error(!/\.xlsx$/i.test(file.name)?'import_xlsx_only':'import_file_limit'));importOpen.value=true;importPreview.value=null;return}
+  const request=++importRequest
+  importOpen.value=true;importParsing.value=true;importPreview.value=null;importError.value='';importNotice.value='';importRestore.value=false;importConflict.value=false;importAttempt=null
+  try {
+    const buffer=await file.arrayBuffer()
+    if(request!==importRequest||stopped)return
+    importWorker=createPartsImportWorker()
+    const result=await new Promise((resolve,reject)=>{
+      importTimeout=setTimeout(()=>reject(new Error('import_timeout')),45000)
+      importWorker.onmessage=({data})=>data.error?reject(new Error(data.error)):resolve(data)
+      importWorker.onerror=()=>reject(new Error('import_invalid_excel'))
+      importWorker.postMessage({buffer,filename:file.name},[buffer])
+    })
+    if(request===importRequest&&!stopped)importPreview.value=result
+  } catch(e) {if(request===importRequest&&!stopped)importError.value=importErrorText(e)}
+  finally {clearTimeout(importTimeout);importWorker?.terminate();importWorker=null;importParsing.value=false}
+}
+function closeImport(value=false) {if(!importSaving.value&&!importParsing.value)importOpen.value=value}
+async function previewRestore() {
+  if(!base.value?.backupBook||saving.value||!commit())return
+  if(dirty.value)await save()
+  if(dirty.value||conflict.value)return
+  importPreview.value={book:cloneBook(base.value.backupBook)};importRestore.value=true;importError.value='';importConflict.value=false;importOpen.value=true
+}
+async function refreshImportBase() {
+  try {
+    const packet=await store.load()
+    if(importAttempt&&JSON.stringify(packet.book)===JSON.stringify(importAttempt))finishImport(packet)
+    else accept(packet)
+    importConflict.value=false;importError.value=''
+  }catch(e){importError.value=importErrorText(e)}
+}
+function finishImport(packet) {
+  editing.value=null;active.value=null;selectedRows.value=[];undo.value=[];redo.value=[];clearFilters();sort.value=null;closeFilter(false);cancelResize()
+  sheetId.value=packet.book.mainSheetId||packet.book.sheets[0].id
+  dirty.value=false;conflict.value=false;error.value='';accept(packet)
+  if(tableScroll.value){tableScroll.value.scrollTop=0;tableScroll.value.scrollLeft=0}
+  importOpen.value=false;importPreview.value=null;importAttempt=null;exportNotice.value='';exportError.value=''
+  importNotice.value=tx('已完整替换并保存到云端：','Replaced and saved to the cloud: ')+packet.book.sourceFile+tx('。可恢复替换前版本。','. The previous version is available to restore.')
+}
+async function confirmImport() {
+  if(!importValid.value||importSaving.value||importParsing.value||saving.value||dirty.value||importConflict.value)return
+  const replacement=importRestore.value?cloneBook(importPreview.value.book):preparePartsReplacement(importPreview.value.book,crypto.randomUUID())
+  if(JSON.stringify(replacement).length>40*1024*1024){importError.value=importErrorText(new Error('import_file_limit'));return}
+  importSaving.value=true;importError.value='';importAttempt=replacement;clearTimeout(saveTimer)
+  try {
+    const packet=await store.replace(replacement,base.value)
+    if(stopped)return
+    finishImport(packet)
+  } catch(e) {importError.value=importErrorText(e);importConflict.value=true}
+  finally {importSaving.value=false}
+}
 const sheet = computed(() => book.value?.sheets.find(s => s.id === sheetId.value))
+const columnsOpen = ref(false), columnSearch = ref(''), hiddenColumns = ref({})
+const columnStorageKey = 'parts-workbook-hidden-columns-v1'
+function readColumnPreferences() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(columnStorageKey) || '{}')
+    if (stored && typeof stored === 'object' && !Array.isArray(stored)) hiddenColumns.value = stored
+  } catch { /* Unavailable storage leaves the default view usable. */ }
+}
+function columnPreferenceKey() { return JSON.stringify([book.value?.sourceFile, book.value?.sourceHash, sheetId.value]) }
+const visibleColumns = computed(() => {
+  const columns = sheet.value?.columns.map((col,c) => ({col,c})) || []
+  const hidden = hiddenColumns.value[columnPreferenceKey()]
+  const visible = columns.filter(({col}) => !Array.isArray(hidden) || !hidden.includes(col.id))
+  return visible.length ? visible : columns.slice(0,1)
+})
+const hiddenColumnCount = computed(() => (sheet.value?.columns.length || 0) - visibleColumns.value.length)
+const columnOptions = computed(() => (sheet.value?.columns || []).map((col,c) => ({col,c})).filter(({c}) =>
+  (columnName(c)+' '+columnLabel(c)).toLocaleLowerCase().includes(columnSearch.value.toLocaleLowerCase())))
+function isColumnVisible(c) { return visibleColumns.value.some(item => item.c === c) }
+function setColumnVisible(c, visible) {
+  if (!sheet.value || !commit() || (!visible && visibleColumns.value.length <= 1)) return
+  const hidden = new Set(sheet.value.columns.filter((_,index) => !isColumnVisible(index)).map(col => col.id))
+  if (visible) hidden.delete(sheet.value.columns[c].id); else hidden.add(sheet.value.columns[c].id)
+  saveColumnPreferences([...hidden])
+}
+function saveColumnPreferences(hidden) {
+  closeFilter(false); cancelResize()
+  hiddenColumns.value = {...hiddenColumns.value, [columnPreferenceKey()]:hidden}
+  if (active.value && !isColumnVisible(active.value.col)) active.value = null
+  try { localStorage.setItem(columnStorageKey, JSON.stringify(hiddenColumns.value)) } catch { /* Keep session preferences when storage is unavailable. */ }
+}
+function showAllColumns() { if (commit()) saveColumnPreferences([]) }
+function openColumns() { if (commit()) { closeFilter(false); columnSearch.value = ''; columnsOpen.value = true } }
+// Keep merged titles at the first visible column, retaining their original cell identity.
+const headerCells = computed(() => (sheet.value?.rows.slice(0,sheet.value.headerRows) || []).map((_,r) =>
+  visibleColumns.value.flatMap(({col,c}) => {
+    const merge = sheet.value.merges.find(m => r >= m.r && r < m.r+m.rows && c >= m.c && c < m.c+m.cols)
+    if (!merge) return [{col,c,cols:1,rows:1}]
+    const span = visibleColumns.value.filter(item => item.c >= merge.c && item.c < merge.c+merge.cols)
+    return r === merge.r && c === span[0].c ? [{col,c:merge.c,cols:span.length,rows:merge.rows}] : []
+  })))
+onMounted(readColumnPreferences)
 const values = computed(() => sheet.value ? sheetValues(sheet.value) : [])
 const matches = computed(() => sheet.value ? filteredRows(sheet.value, values.value, search.value, filters.value, sort.value) : [])
 const shown = matches
@@ -188,6 +304,7 @@ async function save() {
 }
 function schedule() { dirty.value = true; generation++; clearTimeout(saveTimer); saveTimer = setTimeout(save, 650) }
 function mutate(change) {
+  if(importSaving.value)return false
   const previous = book.value, next = cloneBook(previous), target = next.sheets.find(s => s.id === sheetId.value)
   try { change(target); undo.value = [...undo.value.slice(-19), previous]; redo.value = []; book.value = next; if (!conflict.value) error.value = ''; schedule(); return true }
   catch (e) { error.value = errorText(e); return false }
@@ -214,9 +331,15 @@ function keyCell(event, row, col) {
   else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); mutate(s => setCell(s, row.id, col, '')) }
   else if (event.key.startsWith('Arrow')) {
     event.preventDefault()
-    const cells = [...tableScroll.value.querySelectorAll('[data-cell]')], index = cells.indexOf(event.currentTarget)
-    const next = event.key === 'ArrowLeft' ? index - 1 : event.key === 'ArrowRight' ? index + 1 : event.key === 'ArrowUp' ? index - sheet.value.columns.length : index + sheet.value.columns.length
-    cells[next]?.focus(); cells[next]?.click()
+    const currentRow = event.currentTarget.closest('tr'), cells = [...currentRow.querySelectorAll('[data-cell]')]
+    let target
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') target = cells[cells.indexOf(event.currentTarget)+(event.key==='ArrowLeft'?-1:1)]
+    else {
+      const rows = [...tableScroll.value.querySelectorAll('tr')].filter(row => row.querySelector('[data-cell]'))
+      const nextRow = rows[rows.indexOf(currentRow)+(event.key==='ArrowUp'?-1:1)]
+      target = nextRow?.querySelector('[data-column="'+col+'"]') || nextRow?.querySelector('[data-cell]')
+    }
+    target?.focus(); target?.click()
   }
 }
 function paste(event, row, col) {
@@ -227,8 +350,9 @@ function paste(event, row, col) {
   const lines = text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').map(line => line.split('\t'))
   const visibleRows = [...sheet.value.rows.slice(0, sheet.value.headerRows).map((r, index) => ({row:r,index})), ...matches.value]
   const start = visibleRows.findIndex(item => item.row.id === row.id)
-  if (lines.some((line, r) => !visibleRows[start + r] || col + line.length > sheet.value.columns.length)) { error.value = tx('粘贴内容超出当前行列范围，请先新增行或列。', 'Paste exceeds the grid. Add rows or columns first.'); return }
-  mutate(s => lines.forEach((line, r) => line.forEach((value, c) => setCell(s, visibleRows[start + r].row.id, col + c, value))))
+  const startColumn = visibleColumns.value.findIndex(item => item.c >= col)
+  if (start < 0 || startColumn < 0 || lines.some((line, r) => !visibleRows[start + r] || startColumn + line.length > visibleColumns.value.length)) { error.value = tx('粘贴内容超出可见行列范围，请先显示或新增行列。', 'Paste exceeds the visible grid. Show or add rows or columns first.'); return }
+  mutate(s => lines.forEach((line, r) => line.forEach((value, c) => setCell(s, visibleRows[start + r].row.id, visibleColumns.value[startColumn+c].c, value))))
 }
 function toggleRow(id) { selectedRows.value = selectedRows.value.includes(id) ? selectedRows.value.filter(x => x !== id) : [...selectedRows.value, id] }
 function toggleAllRows() { const ids = shown.value.map(({row}) => row.id); selectedRows.value = allSelected.value ? [] : ids }
@@ -236,7 +360,7 @@ async function addRow() {
   if (!commit()) return
   let id
   if (!mutate(s => { id = insertRow(s, activeIndex.value >= s.headerRows ? activeIndex.value + 1 : s.rows.length) })) return
-  clearFilters(); sort.value = null; active.value = {rowId:id,col:0}
+  clearFilters(); sort.value = null; active.value = {rowId:id,col:visibleColumns.value[0].c}
   await nextTick()
   const cell = tableScroll.value?.querySelector('[data-row-id="'+id+'"] [data-cell]')
   cell?.scrollIntoView({block:'center',inline:'nearest'}); cell?.focus({preventScroll:true})
@@ -272,8 +396,6 @@ async function exportExcel() {
   finally {clearTimeout(exportTimeout);exportWorker?.terminate();exportWorker=null;exporting.value=false}
 }
 function switchSheet(id) { if (!commit()) return; closeFilter(false); cancelResize(); sheetId.value = id; clearFilters(); sort.value = null; active.value = null; selectedRows.value = []; if (tableScroll.value) tableScroll.value.scrollTop = 0 }
-function merged(r, c) { return sheet.value.merges.find(m => r >= m.r && r < m.r + m.rows && c >= m.c && c < m.c + m.cols) }
-function covered(r, c) { const m = merged(r, c); return m && (m.r !== r || m.c !== c) }
 function width(c) {
   const col = sheet.value.columns[c]
   if (resizing.value?.axis==='column'&&resizing.value.id===col.id) return resizing.value.size
@@ -281,37 +403,66 @@ function width(c) {
   const source = Number(/^s\d+-c(\d+)$/.exec(col.id)?.[1] ?? c)
   return sheet.value.id === 's1' ? (source === 0 ? 150 : 120) : [60,110,160,95,150,280,280,245,150,120,110,145,170,150,160,160,160,200,170,140,165,240,170,210,180,170,320][source] || 170
 }
-function beforeUnload(event) { if (dirty.value || saving.value || editing.value) { event.preventDefault(); event.returnValue = '' } }
+function beforeUnload(event) { if (dirty.value || saving.value || editing.value || importSaving.value) { event.preventDefault(); event.returnValue = '' } }
 onMounted(() => { document.addEventListener('pointerdown', filterOutside); document.addEventListener('focusin', filterOutside); window.addEventListener('resize', positionFilter); window.addEventListener('scroll', filterScroll, true) })
 onDeactivated(() => { closeFilter(false); cancelResize() })
 onUnmounted(cancelResize)
 onUnmounted(() => { document.removeEventListener('pointerdown', filterOutside); document.removeEventListener('focusin', filterOutside); window.removeEventListener('resize', positionFilter); window.removeEventListener('scroll', filterScroll, true) })
-onMounted(async () => { window.addEventListener('beforeunload', beforeUnload); await load(); pollTimer = setInterval(async () => { if (dirty.value || saving.value || editing.value || resizing.value || loading.value || stopped || !base.value) return; try { const next = await store.load(); if (!stopped && !dirty.value && !saving.value && !editing.value && !resizing.value) { if (next.revision > base.value.revision) { accept(next); undo.value = []; redo.value = [] } error.value = '' } } catch (e) { if (!stopped) error.value = errorText(e) } }, 15000) })
-onUnmounted(() => { stopped = true; clearTimeout(saveTimer); clearInterval(pollTimer); clearTimeout(exportTimeout); exportWorker?.terminate(); window.removeEventListener('beforeunload', beforeUnload) })
+onMounted(async () => { window.addEventListener('beforeunload', beforeUnload); await load(); pollTimer = setInterval(async () => { if (dirty.value || saving.value || editing.value || resizing.value || loading.value || importOpen.value || stopped || !base.value) return; try { const next = await store.load(); if (!stopped && !dirty.value && !saving.value && !editing.value && !resizing.value && !importOpen.value) { if (next.revision > base.value.revision) { accept(next); undo.value = []; redo.value = [] } error.value = '' } } catch (e) { if (!stopped) error.value = errorText(e) } }, 15000) })
+onUnmounted(() => { stopped = true; importRequest++; clearTimeout(importTimeout); importWorker?.terminate(); clearTimeout(saveTimer); clearInterval(pollTimer); clearTimeout(exportTimeout); exportWorker?.terminate(); window.removeEventListener('beforeunload', beforeUnload) })
 </script>
 
 <template>
   <section class="parts-workbook" :class="{'pw-resizing-columns':resizing?.axis==='column','pw-resizing-rows':resizing?.axis==='row'}" :aria-label="tx('备品备件表格','Parts workbook')">
     <header class="pw-heading"><slot name="navigation"/><div class="pw-title" :title="book?.sourceFile"><span class="pw-icon"><Table2 :size="23" /></span><div><h1>{{tx('备品备件总表','Parts order workbook')}}</h1><p>{{book?.sourceFile || '2026 Parts order list发澳洲.xlsx'}}</p></div></div><div class="pw-status" :class="{failed:error}" aria-live="polite"><LoaderCircle v-if="loading || saving" :size="17" class="pw-spin"/><CloudCheck v-else :size="17"/><span>{{status}}<small v-if="base?.savedAt">{{new Date(base.savedAt).toLocaleTimeString(language==='en'?'en-AU':'zh-CN')}} · {{tx('版本','Version')}} {{base.revision}}</small></span></div><slot name="header-actions"/></header>
     <div v-if="error" class="pw-error" role="alert"><span>{{error}}</span><button v-if="conflict" @click="reviewRemote">{{tx('查看云端版本','Review cloud version')}}</button><button v-else @click="retry">{{tx('重试','Retry')}}</button></div>
+    <input ref="importInput" type="file" accept=".xlsx" hidden @change="readImportFile"/><p v-if="importNotice" class="pw-export-notice" role="status">{{importNotice}}</p>
     <div v-if="exportError" class="pw-error" role="alert">{{exportError}}</div><p v-if="exportNotice" class="pw-export-notice" role="status">{{exportNotice}}</p>
     <div v-if="!book" class="pw-loading">{{loading ? tx('正在加载完整工作簿…','Loading the complete workbook…') : tx('工作簿加载失败，请重试。','Could not load the workbook. Please retry.')}}</div>
     <template v-else>
-      <div class="pw-toolbar"><label class="pw-search"><Search :size="17"/><input v-model="search" :placeholder="tx('搜索当前工作表…','Search this worksheet…')" :aria-label="tx('搜索当前工作表','Search worksheet')"/></label><span class="pw-filter-hint"><Filter :size="16"/>{{filterCount ? tx(filterCount+' 列已筛选',filterCount+' columns filtered') : tx('每列表头均可筛选','Filter any column below')}}</span><button v-if="search || filterCount || sort" @click="clearFilters();sort=null"><X :size="15"/>{{tx('清除','Clear')}}</button><span class="pw-toolbar-divider"/><button class="pw-primary" @click="addRow"><Plus :size="16"/>{{tx('新增行','Add row')}}</button><button @click="commit() && mutate(s => insertColumn(s))"><Columns3 :size="16"/>{{tx('新增列','Add column')}}</button><button :disabled="!selectedRows.length" @click="askDelete('rows')"><Trash2 :size="16"/>{{tx('删除行','Delete rows')}}<b v-if="selectedRows.length">{{selectedRows.length}}</b></button><button :disabled="!active || sheet.columns.length <= 1" @click="askDelete('column')">{{tx('删除列','Delete column')}}</button><span class="pw-toolbar-divider"/><button :disabled="!activeRow" @click="openColors" :title="tx('为选中的单元格标注颜色','Color the selected cell')"><PaintBucket :size="16"/><i class="pw-current-fill" :style="{background:activeRow?cellFill(sheet,activeRow,active.col)||'#ffffff':'#ffffff'}"/>{{tx('填色','Fill color')}}</button><button :disabled="!undo.length || !!editing" :title="tx('撤销','Undo')" :aria-label="tx('撤销','Undo')" @click="undoChange"><Undo2 :size="17"/></button><button :disabled="!redo.length || !!editing" :title="tx('重做','Redo')" :aria-label="tx('重做','Redo')" @click="redoChange"><Redo2 :size="17"/></button><button :disabled="saving || !dirty || conflict" @click="commit() && save()"><RefreshCw :size="15"/>{{tx('保存','Save')}}</button><button class="pw-export" :disabled="exporting" @click="exportExcel" :title="tx('按原文件格式导出全部工作表，不受筛选影响','Export all worksheets in the original format, regardless of filters')"><LoaderCircle v-if="exporting" :size="16" class="pw-spin"/><Download v-else :size="16"/>{{exporting?tx('正在导出…','Exporting…'):tx('导出 Excel','Export Excel')}}</button></div>
+      <div class="pw-toolbar"><label class="pw-search"><Search :size="17"/><input v-model="search" :placeholder="tx('搜索当前工作表…','Search this worksheet…')" :aria-label="tx('搜索当前工作表','Search worksheet')"/></label><span class="pw-filter-hint"><Filter :size="16"/>{{filterCount ? tx(filterCount+' 列已筛选',filterCount+' columns filtered') : tx('每列表头均可筛选','Filter any column below')}}</span><button v-if="search || filterCount || sort" @click="clearFilters();sort=null"><X :size="15"/>{{tx('清除','Clear')}}</button><span class="pw-toolbar-divider"/><button class="pw-primary" @click="addRow"><Plus :size="16"/>{{tx('新增行','Add row')}}</button><button @click="openColumns" :class="{selected:hiddenColumnCount>0}"><Columns3 :size="16"/>{{tx('显示/隐藏列','Show/hide columns')}}<b v-if="hiddenColumnCount">{{hiddenColumnCount}}</b></button><button @click="commit() && mutate(s => insertColumn(s))"><Columns3 :size="16"/>{{tx('新增列','Add column')}}</button><button :disabled="!selectedRows.length" @click="askDelete('rows')"><Trash2 :size="16"/>{{tx('删除行','Delete rows')}}<b v-if="selectedRows.length">{{selectedRows.length}}</b></button><button :disabled="!active || sheet.columns.length <= 1" @click="askDelete('column')">{{tx('删除列','Delete column')}}</button><span class="pw-toolbar-divider"/><button :disabled="!activeRow" @click="openColors" :title="tx('为选中的单元格标注颜色','Color the selected cell')"><PaintBucket :size="16"/><i class="pw-current-fill" :style="{background:activeRow?cellFill(sheet,activeRow,active.col)||'#ffffff':'#ffffff'}"/>{{tx('填色','Fill color')}}</button><button :disabled="!undo.length || !!editing" :title="tx('撤销','Undo')" :aria-label="tx('撤销','Undo')" @click="undoChange"><Undo2 :size="17"/></button><button :disabled="!redo.length || !!editing" :title="tx('重做','Redo')" :aria-label="tx('重做','Redo')" @click="redoChange"><Redo2 :size="17"/></button><button :disabled="saving || !dirty || conflict" @click="commit() && save()"><RefreshCw :size="15"/>{{tx('保存','Save')}}</button><button :disabled="saving||importSaving||importParsing||conflict" @click="beginImport"><Upload :size="16"/>{{tx('导入 Excel','Import Excel')}}</button><button v-if="base?.backupBook" :disabled="saving||importSaving||conflict" @click="previewRestore">{{tx('恢复替换前版本','Restore previous version')}}</button><button class="pw-export" :disabled="exporting" @click="exportExcel" :title="tx('按原文件格式导出全部工作表，不受筛选影响','Export all worksheets in the original format, regardless of filters')"><LoaderCircle v-if="exporting" :size="16" class="pw-spin"/><Download v-else :size="16"/>{{exporting?tx('正在导出…','Exporting…'):tx('导出 Excel','Export Excel')}}</button></div>
       <div class="pw-formulabar"><span class="pw-address">{{active ? columnName(active.col)+(activeIndex+1) : '—'}}</span><span class="pw-fx">fx</span><button class="pw-formulavalue" :disabled="!activeRow" @click="startEdit(activeRow,active.col)" :title="tx('点击编辑完整内容','Click to edit the full value')">{{formula || displayActive || tx('选择单元格，双击或按 Enter 编辑','Select a cell; double-click or press Enter to edit')}}</button><span v-if="externalFormula(formula)" class="pw-external">{{tx('外部公式 · 原文件缓存值','External formula · cached value')}}</span></div>
       <div class="pw-grid-scroll" ref="tableScroll">
-        <table class="pw-grid" :aria-label="sheet.name" :style="{width: 48+sheet.columns.reduce((n,_,c)=>n+width(c),0)+'px'}">
-          <colgroup><col style="width:48px"/><col v-for="(col,c) in sheet.columns" :key="col.id" :style="{width:width(c)+'px'}"/></colgroup>
-          <thead><tr class="pw-letters"><th><input type="checkbox" :checked="allSelected" @change="toggleAllRows" :aria-label="tx('选择全部筛选结果','Select all matching data rows')"/></th><th v-for="(col,c) in sheet.columns" :key="col.id"><button @click="sort=sort?.col===c&&sort.direction===1?{col:c,direction:-1}:sort?.col===c?null:{col:c,direction:1}" :aria-label="tx('排序列 ','Sort column ')+columnName(c)">{{columnName(c)}}<ArrowDown v-if="sort?.col===c&&sort.direction===1" :size="12"/><ArrowUp v-else-if="sort?.col===c" :size="12"/></button><span class="pw-resize-column" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="tx('调整列宽 ','Resize column ')+columnName(c)" :aria-valuemin="48" :aria-valuemax="1200" :aria-valuenow="width(c)" :title="tx('拖动调整列宽；双击恢复默认','Drag to resize column; double-click to reset')" @pointerdown.stop.prevent="startResize($event,'column',col.id)" @pointermove.stop="moveResize" @pointerup.stop="finishResize" @pointercancel="cancelResize" @lostpointercapture="cancelResize" @click.stop @dblclick.stop.prevent="resetDimension('column',col.id)" @keydown.stop="sizeKey($event,'column',col.id,width(c))"/></th></tr>
-            <tr v-for="(row,r) in sheet.rows.slice(0,sheet.headerRows)" :key="row.id" :style="rowStyle(row)" :class="['pw-source-header',{'pw-sized-row':!!rowSize(row),'pw-source-title':r===0&&sheet.headerRows>1,'pw-source-group':r===1&&sheet.headerRows>1}]"><th class="pw-row-number">{{r+1}}<span class="pw-resize-row" role="separator" tabindex="0" aria-orientation="horizontal" :aria-label="tx('调整行高 ','Resize row ')+(r+1)" :aria-valuemin="24" :aria-valuemax="546" :aria-valuenow="rowSize(row)||34" :title="tx('拖动调整行高；双击恢复默认','Drag to resize row; double-click to reset')" @pointerdown.stop.prevent="startResize($event,'row',row.id)" @pointermove.stop="moveResize" @pointerup.stop="finishResize" @pointercancel="cancelResize" @lostpointercapture="cancelResize" @click.stop @dblclick.stop.prevent="resetDimension('row',row.id)" @keydown.stop="sizeKey($event,'row',row.id,rowSize(row)||34)"/></th><template v-for="(col,c) in sheet.columns" :key="col.id"><th v-if="!covered(r,c)" :colspan="merged(r,c)?.cols || 1" :rowspan="merged(r,c)?.rows || 1" tabindex="0" data-cell :style="{'--pw-cell-fill':cellFill(sheet,row,c)}" :class="{'has-fill':!!cellFill(sheet,row,c),focused:active?.rowId===row.id&&active?.col===c}" @click="selectCell(row,c)" @dblclick="startEdit(row,c)" @keydown="keyCell($event,row,c)" @paste="paste($event,row,c)"><textarea v-if="editing?.rowId===row.id&&editing?.col===c" ref="editor" v-model="draft" :aria-label="columnName(c)+(r+1)" @blur="commit" @keydown.enter.exact.prevent="commit" @keydown.esc.prevent="editing=null"/><span v-else>{{values[r][c]}}</span></th></template></tr>
-            <tr class="pw-filter-row"><th><Filter :size="14"/></th><th v-for="(col,c) in sheet.columns" :key="col.id"><button class="pw-column-filter" :class="{active:!!filters[c]}" @click="openFilter(c,$event.currentTarget)" @keydown.down.prevent="openFilter(c,$event.currentTarget)" :aria-label="tx('筛选列 ','Filter column ')+columnName(c)+' · '+columnLabel(c)" :title="columnLabel(c)+' · '+filterLabel(c)" aria-haspopup="dialog" :aria-expanded="filterOpen&&filterColumn===c" :aria-controls="filterOpen&&filterColumn===c?'pw-column-filter-popover':undefined"><Filter :size="13"/><span>{{filterLabel(c)}}</span></button></th></tr>
+        <table class="pw-grid" :aria-label="sheet.name" :style="{width: 48+visibleColumns.reduce((n,{c})=>n+width(c),0)+'px'}">
+          <colgroup><col style="width:48px"/><col v-for="{col,c} in visibleColumns" :key="col.id" :style="{width:width(c)+'px'}"/></colgroup>
+          <thead><tr class="pw-letters"><th><input type="checkbox" :checked="allSelected" @change="toggleAllRows" :aria-label="tx('选择全部筛选结果','Select all matching data rows')"/></th><th v-for="{col,c} in visibleColumns" :key="col.id"><button @click="sort=sort?.col===c&&sort.direction===1?{col:c,direction:-1}:sort?.col===c?null:{col:c,direction:1}" :aria-label="tx('排序列 ','Sort column ')+columnName(c)">{{columnName(c)}}<ArrowDown v-if="sort?.col===c&&sort.direction===1" :size="12"/><ArrowUp v-else-if="sort?.col===c" :size="12"/></button><span class="pw-resize-column" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="tx('调整列宽 ','Resize column ')+columnName(c)" :aria-valuemin="48" :aria-valuemax="1200" :aria-valuenow="width(c)" :title="tx('拖动调整列宽；双击恢复默认','Drag to resize column; double-click to reset')" @pointerdown.stop.prevent="startResize($event,'column',col.id)" @pointermove.stop="moveResize" @pointerup.stop="finishResize" @pointercancel="cancelResize" @lostpointercapture="cancelResize" @click.stop @dblclick.stop.prevent="resetDimension('column',col.id)" @keydown.stop="sizeKey($event,'column',col.id,width(c))"/></th></tr>
+            <tr v-for="(row,r) in sheet.rows.slice(0,sheet.headerRows)" :key="row.id" :style="rowStyle(row)" :class="['pw-source-header',{'pw-sized-row':!!rowSize(row),'pw-source-title':r===0&&sheet.headerRows>1,'pw-source-group':r===1&&sheet.headerRows>1}]"><th class="pw-row-number">{{r+1}}<span class="pw-resize-row" role="separator" tabindex="0" aria-orientation="horizontal" :aria-label="tx('调整行高 ','Resize row ')+(r+1)" :aria-valuemin="24" :aria-valuemax="546" :aria-valuenow="rowSize(row)||34" :title="tx('拖动调整行高；双击恢复默认','Drag to resize row; double-click to reset')" @pointerdown.stop.prevent="startResize($event,'row',row.id)" @pointermove.stop="moveResize" @pointerup.stop="finishResize" @pointercancel="cancelResize" @lostpointercapture="cancelResize" @click.stop @dblclick.stop.prevent="resetDimension('row',row.id)" @keydown.stop="sizeKey($event,'row',row.id,rowSize(row)||34)"/></th><template v-for="{col,c,cols,rows} in headerCells[r]" :key="col.id"><th :colspan="cols" :rowspan="rows" tabindex="0" data-cell :data-column="c" :style="{'--pw-cell-fill':cellFill(sheet,row,c)}" :class="{'has-fill':!!cellFill(sheet,row,c),focused:active?.rowId===row.id&&active?.col===c}" @click="selectCell(row,c)" @dblclick="startEdit(row,c)" @keydown="keyCell($event,row,c)" @paste="paste($event,row,c)"><textarea v-if="editing?.rowId===row.id&&editing?.col===c" ref="editor" v-model="draft" :aria-label="columnName(c)+(r+1)" @blur="commit" @keydown.enter.exact.prevent="commit" @keydown.esc.prevent="editing=null"/><span v-else>{{values[r][c]}}</span></th></template></tr>
+            <tr class="pw-filter-row"><th><Filter :size="14"/></th><th v-for="{col,c} in visibleColumns" :key="col.id"><button class="pw-column-filter" :class="{active:!!filters[c]}" @click="openFilter(c,$event.currentTarget)" @keydown.down.prevent="openFilter(c,$event.currentTarget)" :aria-label="tx('筛选列 ','Filter column ')+columnName(c)+' · '+columnLabel(c)" :title="columnLabel(c)+' · '+filterLabel(c)" aria-haspopup="dialog" :aria-expanded="filterOpen&&filterColumn===c" :aria-controls="filterOpen&&filterColumn===c?'pw-column-filter-popover':undefined"><Filter :size="13"/><span>{{filterLabel(c)}}</span></button></th></tr>
           </thead>
-          <tbody><tr v-for="{row,index} in shown" :key="row.id" v-memo="[row,index,values[index],rowSize(row),active?.rowId===row.id?active.col:null,editing?.rowId===row.id?editing.col:null,editing?.rowId===row.id?draft:null,selectedRowSet.has(row.id),language]" :data-row-id="row.id" :style="rowStyle(row)" :class="{'pw-sized-row':!!rowSize(row),'pw-row-selected':selectedRowSet.has(row.id)}"><th class="pw-row-number"><label><span>{{index+1}}</span><input type="checkbox" :checked="selectedRowSet.has(row.id)" :aria-label="tx('选择第 ','Select row ')+(index+1)" @change="toggleRow(row.id)"/></label><span class="pw-resize-row" role="separator" tabindex="0" aria-orientation="horizontal" :aria-label="tx('调整行高 ','Resize row ')+(index+1)" :aria-valuemin="24" :aria-valuemax="546" :aria-valuenow="rowSize(row)||34" :title="tx('拖动调整行高；双击恢复默认','Drag to resize row; double-click to reset')" @pointerdown.stop.prevent="startResize($event,'row',row.id)" @pointermove.stop="moveResize" @pointerup.stop="finishResize" @pointercancel="cancelResize" @lostpointercapture="cancelResize" @click.stop @dblclick.stop.prevent="resetDimension('row',row.id)" @keydown.stop="sizeKey($event,'row',row.id,rowSize(row)||34)"/></th><td v-for="(col,c) in sheet.columns" :key="col.id" tabindex="0" data-cell :style="{'--pw-cell-fill':cellFill(sheet,row,c)}" :class="{'has-fill':!!cellFill(sheet,row,c),focused:active?.rowId===row.id&&active?.col===c,numeric:typeof values[index][c]==='number',formula:!!row.formulas[c]}" @click="selectCell(row,c)" @dblclick="startEdit(row,c)" @keydown="keyCell($event,row,c)" @paste="paste($event,row,c)" @copy="!editing && ($event.clipboardData.setData('text/plain',String(values[index][c]??'')),$event.preventDefault())"><textarea v-if="editing?.rowId===row.id&&editing?.col===c" ref="editor" v-model="draft" :aria-label="columnName(c)+(index+1)" @blur="commit" @keydown.enter.exact.prevent="commit" @keydown.esc.prevent="editing=null"/><span v-else :title="String(values[index][c]??'')">{{values[index][c]}}</span></td></tr></tbody>
+          <tbody><tr v-for="{row,index} in shown" :key="row.id" v-memo="[visibleColumns,row,index,values[index],rowSize(row),active?.rowId===row.id?active.col:null,editing?.rowId===row.id?editing.col:null,editing?.rowId===row.id?draft:null,selectedRowSet.has(row.id),language]" :data-row-id="row.id" :style="rowStyle(row)" :class="{'pw-sized-row':!!rowSize(row),'pw-row-selected':selectedRowSet.has(row.id)}"><th class="pw-row-number"><label><span>{{index+1}}</span><input type="checkbox" :checked="selectedRowSet.has(row.id)" :aria-label="tx('选择第 ','Select row ')+(index+1)" @change="toggleRow(row.id)"/></label><span class="pw-resize-row" role="separator" tabindex="0" aria-orientation="horizontal" :aria-label="tx('调整行高 ','Resize row ')+(index+1)" :aria-valuemin="24" :aria-valuemax="546" :aria-valuenow="rowSize(row)||34" :title="tx('拖动调整行高；双击恢复默认','Drag to resize row; double-click to reset')" @pointerdown.stop.prevent="startResize($event,'row',row.id)" @pointermove.stop="moveResize" @pointerup.stop="finishResize" @pointercancel="cancelResize" @lostpointercapture="cancelResize" @click.stop @dblclick.stop.prevent="resetDimension('row',row.id)" @keydown.stop="sizeKey($event,'row',row.id,rowSize(row)||34)"/></th><td v-for="{col,c} in visibleColumns" :key="col.id" tabindex="0" data-cell :data-column="c" :style="{'--pw-cell-fill':cellFill(sheet,row,c)}" :class="{'has-fill':!!cellFill(sheet,row,c),focused:active?.rowId===row.id&&active?.col===c,numeric:typeof values[index][c]==='number',formula:!!row.formulas[c]}" @click="selectCell(row,c)" @dblclick="startEdit(row,c)" @keydown="keyCell($event,row,c)" @paste="paste($event,row,c)" @copy="!editing && ($event.clipboardData.setData('text/plain',String(values[index][c]??'')),$event.preventDefault())"><textarea v-if="editing?.rowId===row.id&&editing?.col===c" ref="editor" v-model="draft" :aria-label="columnName(c)+(index+1)" @blur="commit" @keydown.enter.exact.prevent="commit" @keydown.esc.prevent="editing=null"/><span v-else :title="String(values[index][c]??'')">{{values[index][c]}}</span></td></tr></tbody>
         </table><div v-if="!shown.length" class="pw-empty">{{tx('没有符合筛选条件的行。','No rows match these filters.')}}<button @click="clearFilters">{{tx('清除筛选','Clear filters')}}</button></div>
       </div>
       <footer class="pw-footer" :title="tx('拖动列头／行号边界调整尺寸 · 双击边界恢复 · 双击格子编辑','Drag header edges to resize · Double-click edges to reset · Double-click cells to edit')"><div class="pw-sheet-tabs" role="tablist" :aria-label="tx('工作表','Worksheets')"><button v-for="s in book.sheets" :key="s.id" role="tab" :aria-selected="sheetId===s.id" :class="{active:sheetId===s.id}" @click="switchSheet(s.id)"><Table2 :size="15"/>{{s.name}}<small>{{s.rows.length}} × {{s.columns.length}}</small></button></div><div class="pw-footer-meta"><span>{{tx('原文件','Original')}}: {{sheet.originalRows}} {{tx('行','rows')}} × {{sheet.originalColumns}} {{tx('列','columns')}} · {{tx('当前','Current')}}: {{sheet.rows.length}} × {{sheet.columns.length}} {{tx('（含标题行）','(including headers)')}}</span></div><div class="pw-row-count" role="status">{{tx('显示','Showing')}} {{matches.length}} / {{sheet.rows.length-sheet.headerRows}} {{tx('数据行 · 连续滚动','data rows · Continuous scrolling')}}</div></footer>
 
     </template>
+    <Dialog :model-value="importOpen" @update:model-value="closeImport" :disable-outside-click-to-close="importParsing||importSaving" :options="{title:importRestore?tx('恢复替换前版本','Restore previous version'):tx('导入 Excel · 完整替换总表','Import Excel · Replace workbook'),size:'2xl'}">
+      <template #body-content><div class="pw-import-panel">
+        <p v-if="importParsing" role="status">{{tx('正在读取文件并检查工作表…','Reading the file and checking worksheets…')}}</p>
+        <div v-if="importError" class="pw-error" role="alert">{{importError}}</div>
+        <template v-if="importPreview">
+          <p>{{tx('当前文件：','Current file: ')}}<strong>{{book.sourceFile}}</strong> · {{book.sheets.length}} {{tx('个工作表','sheets')}}</p>
+          <p>{{tx('替换为：','Replace with: ')}}<strong>{{importPreview.book.sourceFile}}</strong></p>
+          <p class="pw-import-warning">{{tx('确认后，当前所有工作表和表内修改将被此文件完整替换，不会追加旧数据。变更将保存到云端并同步其他页面和用户；系统保留最近一次替换前版本供恢复。','Confirmation replaces all worksheets and their edits with this file, without appending old rows. The change saves to the cloud and updates other pages and users. One previous version is kept for restoration.')}}</p>
+          <fieldset :disabled="importSaving||importRestore">
+            <label>{{tx('用于订单联动的主表','Main worksheet for order data')}}<select v-model="importPreview.book.mainSheetId"><option v-for="s in importPreview.book.sheets" :key="s.id" :value="s.id">{{s.name}}</option></select></label>
+            <div class="pw-import-summary"><table><thead><tr><th>{{tx('工作表','Worksheet')}}</th><th>{{tx('数据行','Data rows')}}</th><th>{{tx('列数','Columns')}}</th><th>{{tx('字段表头所在行','Column-header row')}}</th></tr></thead><tbody><tr v-for="s in importPreview.book.sheets" :key="s.id"><td>{{s.name}}</td><td>{{s.rows.length-s.headerRows}}</td><td>{{s.columns.length}}</td><td><input type="number" v-model.number="s.headerRows" min="1" :max="s.rows.length" :aria-label="s.name+' '+tx('字段表头所在行','column-header row')"/></td></tr></tbody></table></div>
+          </fieldset>
+          <p v-if="!importRestore&&!importMapping.valid" class="pw-import-warning" role="alert">{{tx('主表须包含唯一的订单号（Purchase Order）、Line No、SAP 料号（Stockcode）和需求数量（Qty）列。请检查主表和表头行；重复字段也需先修正。','The main sheet needs unique Purchase Order, Line No, Stockcode and Qty columns. Check the selected sheet and header row; duplicate fields must be corrected.')}}</p>
+          <p v-if="importPreview.formulaCount" class="pw-filter-help">{{tx('公式将保留。网页支持基础计算，其他公式显示 Excel 上次保存的结果；请先在 Excel 中完成计算并保存。','Formulas are preserved. Basic formulas calculate in the browser; other formulas display Excel’s last saved results. Recalculate and save in Excel before importing.')}}<span v-if="importPreview.missingCaches"> {{tx('有 '+importPreview.missingCaches+' 个公式没有缓存结果。',importPreview.missingCaches+' formulas have no cached result.')}}</span></p>
+          <div v-if="importMainSheet" class="pw-import-sample"><p>{{tx('主表预览（前 3 条数据）','Main worksheet preview (first 3 data rows)')}}</p><table><thead><tr><th v-for="(value,c) in importMainSheet.rows[importMainSheet.headerRows-1]?.cells" :key="c">{{value||columnName(c)}}</th></tr></thead><tbody><tr v-for="row in importMainSheet.rows.slice(importMainSheet.headerRows,importMainSheet.headerRows+3)" :key="row.id"><td v-for="(value,c) in row.cells" :key="c">{{value}}</td></tr></tbody></table></div>
+        </template>
+      </div></template>
+      <template #actions><div class="pw-import-actions"><button class="pw-dialog-button" :disabled="importSaving||importParsing" @click="closeImport(false)">{{tx('取消','Cancel')}}</button><button v-if="importConflict" class="pw-dialog-button" :disabled="importSaving" @click="refreshImportBase">{{tx('载入最新云端版本','Load latest cloud version')}}</button><button class="pw-dialog-button pw-apply" :disabled="!importValid||importSaving||importParsing||importConflict" @click="confirmImport">{{importSaving?tx('正在替换并保存…','Replacing and saving…'):importRestore?tx('确认恢复并保存','Restore and save'):tx('确认完整替换并保存','Replace all and save')}}</button></div></template>
+    </Dialog>
+    <Dialog v-model="columnsOpen" :options="{title:tx('显示/隐藏列','Show/hide columns'),size:'sm'}">
+      <template #body-content><div v-if="sheet" class="pw-filter-panel">
+        <label>{{tx('搜索列','Search columns')}}<input v-model="columnSearch" :placeholder="tx('输入列名或字母…','Enter a column name or letter…')"/></label>
+        <div class="pw-filter-actions"><button @click="showAllColumns">{{tx('显示全部列','Show all columns')}}</button><span>{{tx('已显示','Showing')}} {{visibleColumns.length}} / {{sheet.columns.length}}</span></div>
+        <div class="pw-filter-options pw-visibility-options"><label v-for="{col,c} in columnOptions" :key="col.id"><input type="checkbox" :checked="isColumnVisible(c)" :disabled="isColumnVisible(c)&&visibleColumns.length===1" @change="setColumnVisible(c,$event.target.checked)"/><small>{{columnName(c)}}</small><span>{{columnLabel(c)}}</span><small v-if="filters[c]">{{tx('已筛选','Filtered')}}</small></label><p v-if="!columnOptions.length">{{tx('没有匹配的列','No matching columns')}}</p></div>
+        <p class="pw-filter-help">{{tx('勾选显示，取消勾选隐藏，至少保留一列。设置仅保存在当前浏览器；隐藏列仍参与搜索、筛选和计算，导出 Excel 保留全部列。','Check to show, uncheck to hide; keep at least one column. Settings are saved in this browser. Hidden columns still participate in search, filters and calculations; Excel exports include all columns.')}}</p>
+      </div></template>
+      <template #actions><button class="pw-dialog-button pw-apply" @click="columnsOpen=false">{{tx('完成','Done')}}</button></template>
+    </Dialog>
     <Dialog v-model="colorOpen" :options="{title:tx('单元格填色','Cell fill color')+' · '+(active?columnName(active.col)+(activeIndex+1):''),size:'sm'}">
       <template #body-content><div class="pw-fill-palette"><button v-for="option in fillPalette" :key="option.color" :style="{background:option.color}" :aria-pressed="!!activeRow&&cellFill(sheet,activeRow,active.col)===option.color" @click="applyColor(option.color)"><span>{{tx(option.zh,option.en)}}</span><Check v-if="activeRow&&cellFill(sheet,activeRow,active.col)===option.color" :size="16"/></button></div><p class="pw-filter-help">{{tx('选择颜色后自动保存，导出 Excel 也会保留。','Colors save automatically and are included in Excel exports.')}}</p></template>
       <template #actions><button class="pw-dialog-button" @click="applyColor('')">{{tx('清除标注颜色','Clear fill color')}}</button><button class="pw-dialog-button" @click="colorOpen=false">{{tx('取消','Cancel')}}</button></template>
@@ -332,6 +483,9 @@ onUnmounted(() => { stopped = true; clearTimeout(saveTimer); clearInterval(pollT
 </template>
 
 <style scoped>
+.pw-import-panel{display:grid;gap:14px;font-size:14px;color:#395364}.pw-import-panel fieldset{border:0;padding:0;min-width:0}.pw-import-panel label{display:flex;gap:12px;align-items:center}.pw-import-panel select,.pw-import-panel input{border:1px solid #cbdde3;border-radius:5px;padding:6px;max-width:100%}.pw-import-panel input{width:78px}.pw-import-warning{background:#fff7e6;border:1px solid #ead7af;border-radius:6px;padding:12px;line-height:1.7}.pw-import-summary,.pw-import-sample{overflow:auto;max-height:220px;margin-top:12px}.pw-import-panel table{border-collapse:collapse;font-size:12px;width:100%}.pw-import-panel th,.pw-import-panel td{border:1px solid #d6e0e7;padding:8px;text-align:left}.pw-import-panel th{background:#edf4f5;white-space:nowrap}.pw-import-sample td{min-width:100px;max-width:240px;overflow-wrap:anywhere}.pw-import-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+
+.pw-visibility-options{max-height:340px}.pw-visibility-options label:has(input:disabled){opacity:.6}.pw-visibility-options input{width:15px;height:15px}
 .parts-workbook{color:#243e50;min-width:0;font-size:14px}.pw-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;margin:0 0 18px}.pw-title{display:flex;align-items:center;gap:12px}.pw-icon{display:grid;place-items:center;width:45px;height:45px;background:#e5efef;color:#286a70;border:1px solid #c8dddd;border-radius:10px}.pw-heading h1{font-size:23px;font-weight:650;letter-spacing:-.5px;margin:0}.pw-heading p{font-size:12px;color:#71818e;margin:4px 0 0}.pw-status{display:flex;align-items:center;gap:8px;color:#277268;font-size:13px}.pw-status small{display:block;font-size:12px;color:#738591;margin-top:3px}.pw-status.failed{color:#b34d3b}.pw-toolbar{display:flex;align-items:center;gap:6px;padding:12px;background:white;border:1px solid #d6e0e7;border-radius:9px 9px 0 0;flex-wrap:wrap}.parts-workbook button{cursor:pointer}.pw-toolbar button,.pw-error button,.pw-empty button{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid #d6e0e7;border-radius:5px;background:white;padding:7px 9px;font-size:13px;min-height:34px;color:#395364}.parts-workbook button:disabled{opacity:.4;cursor:default}.pw-toolbar button:hover:not(:disabled){background:#edf4f5;border-color:#8fb2b9}.pw-toolbar .pw-primary{background:#246474;border-color:#246474;color:white}.pw-toolbar .pw-export{border-color:#7ba4af;color:#205a6b;margin-left:auto}.pw-export-notice{margin:0 0 10px;font-size:13px;color:#277268}.pw-toolbar .selected{background:#e7f1f3;color:#236273;border-color:#a7c7ce}.pw-toolbar-divider{width:1px;height:23px;background:#dbe4e8;margin:0 3px}.pw-search{display:flex;align-items:center;gap:8px;min-width:170px;flex:1;max-width:290px;color:#77909d}.pw-search input{border:0!important;box-shadow:none!important;width:100%;padding:7px 0;background:transparent;font-size:14px;color:#243e50}.pw-formulabar{display:flex;align-items:center;min-height:41px;border:1px solid #d6e0e7;border-top:0;background:#fff;gap:12px}.pw-address{width:75px;text-align:center;align-self:stretch;display:grid;place-items:center;border-right:1px solid #dde5e9;font:13px monospace;flex-shrink:0}.pw-fx{font:italic 17px Georgia;color:#8b9aa4}.pw-formulavalue{font-size:13px;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;flex:1;min-width:0;max-height:110px;overflow:auto;padding:8px 0;color:#536b7b}.pw-external{font-size:12px;color:#9b6a23;padding:5px 10px;max-width:200px}.pw-grid-scroll{position:relative;max-height:calc(100dvh - 330px);min-height:220px;overflow:auto;border:1px solid #d6e0e7;border-top:0;background:#fff;scrollbar-color:#a9bbc4 #f0f4f7}.pw-grid{table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:14px;color:#2e4555}.pw-grid thead{position:sticky;top:0;z-index:4}.pw-grid th,.pw-grid td{border-right:1px solid #e1e7eb;border-bottom:1px solid #e1e7eb;padding:0;position:relative;font-weight:400;vertical-align:middle}.pw-grid td{height:43px;background:white}.pw-grid td>span{display:block;padding:9px 10px;max-height:76px;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}.pw-grid td.numeric>span{text-align:right;font-variant-numeric:tabular-nums}.pw-grid tbody tr:nth-child(even) td{background:#f8fafb}.pw-grid tbody tr:hover td{background:#eef5f8}.pw-grid .pw-row-selected td{background:#eaf4f6!important}.pw-grid .focused{outline:2px solid #2b8290;outline-offset:-2px;z-index:2;background:#edf7f7!important}.pw-grid [data-cell]:focus-visible{outline:2px solid #2b8290;outline-offset:-2px}.pw-grid textarea{display:block;width:100%;min-height:70px;border:0;outline:2px solid #287f8c;outline-offset:-2px;border-radius:0;padding:9px 10px;resize:vertical;box-shadow:none;color:#233f51;background:#fff;font-size:14px;line-height:1.5}.pw-grid .pw-row-number{position:sticky;left:0;z-index:3;width:48px;background:#f0f4f6!important;text-align:center;color:#738695;font-size:12px;border-right:1px solid #cddbe1}.pw-row-number label{display:flex;flex-direction:column;align-items:center;gap:3px;padding:3px 0}.pw-grid input[type=checkbox]{width:13px;height:13px;accent-color:#246474;margin:0;border-color:#adc0ca;border-radius:3px}.pw-letters th{background:#edf2f5;color:#8395a1;height:29px;text-align:center;font-size:12px}.pw-letters th:first-child{position:sticky;left:0;z-index:5}.pw-letters button{display:flex;align-items:center;justify-content:center;width:100%;gap:5px;height:28px}.pw-source-header th{background:#e8eff3;text-align:left;color:#355568}.pw-source-header th>span{display:block;padding:10px;white-space:pre-wrap;line-height:1.6;font-size:13px;font-weight:600}.pw-source-title th{background:#294f65;color:white}.pw-source-title th>span{font-size:16px;padding:12px 14px;letter-spacing:.1px}.pw-source-group th{background:#d9e8ed;color:#3e697b}.pw-source-group th>span{padding:7px 12px;font-size:12px;font-weight:550}.pw-filter-row th{background:#f7fafb;padding:5px}.pw-column-filter{display:flex;align-items:center;gap:6px;width:100%;min-height:29px;border:1px solid #cbdde3;border-radius:4px;background:white;color:#597785;font-size:12px;padding:4px 6px}.pw-column-filter span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pw-column-filter svg{flex-shrink:0}.pw-column-filter:hover,.pw-column-filter.active{background:#dcedef;border-color:#55929d;color:#195d6b}.pw-filter-hint{display:flex;gap:5px;align-items:center;color:#567a87;font-size:12px}.pw-filter-panel{display:grid;gap:14px;color:#395364;font-size:14px}.pw-filter-panel>label{display:grid;gap:6px}.pw-filter-panel>label input,.pw-filter-panel select{width:100%;padding:9px;border:1px solid #cbdde3;border-radius:5px;background:white}.pw-filter-actions{display:flex;gap:12px;align-items:center;font-size:12px}.pw-filter-actions button{color:#246474;text-decoration:underline;cursor:pointer}.pw-filter-actions span{margin-left:auto;color:#758994}.pw-filter-options{max-height:260px;overflow:auto;border:1px solid #d6e0e7;border-radius:6px}.pw-filter-options label{display:flex;align-items:center;gap:9px;padding:8px 12px;border-bottom:1px solid #edf2f5;cursor:pointer}.pw-filter-options label:hover{background:#f0f7f7}.pw-filter-options input{accent-color:#246474;flex-shrink:0}.pw-filter-options span{overflow-wrap:anywhere;min-width:0;flex:1;white-space:pre-wrap}.pw-filter-options small{color:#78909b}.pw-filter-options p{padding:20px}.pw-filter-help{font-size:12px;color:#758994;line-height:1.6}.pw-apply{background:#246474;color:white}.pw-grid td.formula:after{content:'';position:absolute;right:3px;top:3px;width:4px;height:4px;border-radius:50%;background:#91adb8;pointer-events:none}.pw-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;background:white;border:1px solid #d6e0e7;border-top:0;border-radius:0 0 9px 9px;padding:0 12px 0 0}.pw-sheet-tabs{display:flex;align-self:stretch}.pw-sheet-tabs button{display:flex;gap:7px;align-items:center;padding:14px 17px;border-right:1px solid #e4ebef;border-bottom:3px solid transparent;color:#718797;font-size:14px}.pw-sheet-tabs button.active{border-bottom-color:#277c88;color:#235d6d;background:#f0f7f7;font-weight:600}.pw-sheet-tabs small{font-size:12px;font-weight:400;color:#7e969f}.pw-row-count{font-size:12px;color:#6a8190;padding:10px 0}.pw-footnote{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:12px;color:#7a8e9b;margin-top:11px;line-height:1.6}.pw-error{display:flex;align-items:center;gap:12px;border:1px solid #ecc9be;background:#fff5f0;color:#a84932;padding:10px 14px;margin-bottom:12px;font-size:14px}.pw-error span{flex:1}.pw-loading,.pw-empty{padding:50px 24px;text-align:center;color:#748b98}.pw-empty{position:sticky;left:0}.pw-empty button{margin-left:14px}.pw-confirm-text{line-height:1.9;font-size:15px;color:#405b6b}.pw-dialog-button{padding:8px 14px;border:1px solid #ccd9e0;border-radius:5px;font-size:14px}.pw-danger{background:#a94938;color:white}.pw-spin{animation:pw-spin 1.5s linear infinite}@keyframes pw-spin{to{transform:rotate(360deg)}}@media(max-width:800px){.pw-heading{align-items:flex-start;gap:10px}.pw-heading h1{font-size:20px}.pw-status{font-size:12px}.pw-icon{display:none}.pw-toolbar{gap:7px}.pw-search{max-width:none;flex-basis:100%}.pw-footer{padding:0 8px 10px}.pw-grid-scroll{max-height:60dvh}.pw-external{display:none}.pw-toolbar-divider{display:none}.pw-footnote{gap:4px}.pw-toolbar button{min-height:38px}.pw-sheet-tabs button{padding:12px}.pw-status small{font-size:11px}}
 /* Keep controls compact and give all remaining height to the scrolling grid. */
 .parts-workbook{display:flex;flex-direction:column;flex:1;min-height:0;width:100%;overflow:hidden}
