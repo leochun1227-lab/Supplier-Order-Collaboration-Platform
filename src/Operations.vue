@@ -1,13 +1,14 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Button, Badge } from 'frappe-ui'
-import { ArrowUpRight, ArrowRight, Search, RefreshCw, Plus, Ship, Plane, CircleAlert, CheckCheck, Download, Filter, X } from 'lucide-vue-next'
+import { ArrowUpRight, ArrowRight, Search, RefreshCw, Plus, Ship, Plane, CircleAlert, CheckCheck, Download, Filter, X, Factory, Warehouse, Wrench, Package } from 'lucide-vue-next'
 import { t as tr, dateLabel, language } from './i18n.mjs'
 import { normalizedIdentity, sapLineMatches } from './sap-reference.mjs'
 import { downloadExceptions } from './exception-export.mjs'
+import { managerOverview } from './manager-overview.mjs'
 import { TODAY, openQty } from './domain.mjs'
 import { money, percent } from './analytics.mjs'
-import { KINDS, label, workbookIdentity, isHistoricalOrder, businessSummary, reportedQty, remainingQty, groupLabel, groupedQuantity, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
+import { KINDS, label, workbookIdentity, isHistoricalOrder, reportedQty, remainingQty, groupLabel, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
 const props=defineProps({view:String,orders:Array,shipments:Array,issues:Array,role:String,selection:Object,synced:Boolean})
 const emit=defineEmits(['open-order','review','dispatch','sync','inspect','navigate','reset','clear-selection','shipment'])
 const l=(zh,en)=>tr(label(zh,en))
@@ -25,7 +26,7 @@ function selectStatus(value){clearOrderFilters();status.value=value;emit('clear-
 watch(()=>props.selection,value=>{if(value){clearOrderFilters();status.value='all'}},{immediate:true})
 watch([query,owner,source,purpose,shipping,status,kind,caseStatus,supplier,pageSize,()=>props.view,()=>props.selection],()=>pageNumber.value=1)
 const scope=computed(()=>props.orders.filter(o=>(!supplier.value||o.supplier===supplier.value)&&(!purpose.value||o.type===purpose.value)))
-const summary=computed(()=>businessSummary(scope.value,props.shipments,props.issues))
+const management=computed(()=>managerOverview(scope.value,props.shipments,TODAY))
 const active=computed(()=>props.issues.filter(i=>i.status!=='已解决'))
 const problemOrders=computed(()=>new Set(active.value.map(c=>c.order)))
 function matchesStatus(o,value){return value==='all'||value==='cancelled'&&o.cancelled||value==='open'&&openQty(o)>0||value==='completed'&&!o.cancelled&&o.qtyKnown!==false&&openQty(o)===0||value==='checks'&&problemOrders.value.has(o.id)}
@@ -93,8 +94,35 @@ onBeforeUnmount(()=>{document.removeEventListener('pointerdown',outsideCaseFilte
 function poDiff(o){return !!o?.sapPo&&normalizedIdentity(o.sapPo)!==normalizedIdentity(workbookIdentity(o).po)}
 function lineDiff(o){return !!o?.sapItem&&!sapLineMatches(o)}
 function materialDiff(o){return !!o?.sapPart&&String(o.sapPart).trim()!==String(o.soPart??o.part??'').trim()}
-const transport=computed(()=>imported.value?['海运','空运','快递'].map(mode=>{const os=summary.value.open.filter(o=>o.mode===mode);return {mode,rows:os.map(order=>({order})),count:os.length,value:null,groups:groupedQuantity(os,remainingQty)}}):['海运','空运','快递'].map(mode=>{const rs=summary.value.transitRows.filter(r=>r.shipment.mode===mode);return{mode,rows:rs,count:new Set(rs.map(r=>r.shipment.id)).size,value:rs.filter(r=>priceReady(r.order)).reduce((n,r)=>n+r.qty*r.order.unitPrice/(r.order.priceUnit||1),0),groups:rs.reduce((n,r)=>{n[r.order.unit]=(n[r.order.unit]||0)+r.qty;return n},{})}}))
-const age=computed(()=>[[0,15],[16,30],[31,60],[61,90],[91,Infinity]].map(([min,max])=>({label:max===Infinity?'>90':`${min}–${max}`,rows:summary.value.open.filter(o=>{const d=(Date.parse(TODAY)-Date.parse(o.created))/86400000;return d>=min&&d<=max})})))
+const purposeRows=computed(()=>ageSeries.value.map(s=>({key:s.key,title:s.key==='用途待确认'?l('用途待确认','Unclassified'):tr(s.key),color:s.color,rows:management.value.open.filter(o=>(['生产订单','售后配件'].includes(o.type)?o.type:'用途待确认')===s.key)})))
+const transportRows=computed(()=>management.value.modes.filter(m=>m.mode!=='未分类'||m.rows.length).map((m,i)=>({key:m.mode,title:m.mode==='未分类'?l('运输待确认','Unclassified'):tr(m.mode),color:['#1e40af','#f97316','#7793a7','#b8c4cc'][i],rows:m.rows})))
+const transportPie=computed(()=>{
+  let end=0
+  const total=management.value.open.length
+  const segments=transportRows.value.filter(m=>m.rows.length).map(m=>{
+    const start=end;end+=m.rows.length/total*100
+    const angle=(start+end)/2*Math.PI/50-Math.PI/2
+    return {...m,start,end,x:50+29*Math.cos(angle),y:50+29*Math.sin(angle)}
+  })
+  return {segments,background:total?'conic-gradient('+segments.map(m=>`${m.color} ${m.start}% ${m.end}%`).join(',')+')':'#edf2f5'}
+})
+const formatAmount=value=>value===null?'—':money(value)
+const formatRate=value=>value===null?'—':value.toFixed(1)+'%'
+const formatChange=(value,suffix='%')=>value===null?'—':(value>0?'+':'')+value.toFixed(1)+suffix
+const costMetrics=computed(()=>{
+  const f=management.value.freight.ytd
+  return [
+    {label:l('空运费','Air freight cost'),value:formatAmount(f.airFreight)},
+    {label:l('空运货值','Air cargo value'),value:formatAmount(f.airValue)},
+    {label:l('运费 / 货值','Freight / cargo value'),value:formatRate(f.freightToValue)},
+    {label:l('空运费占比','Air share of freight'),value:formatRate(f.airShare)},
+  ]
+})
+const arrivalMax=computed(()=>Math.max(1,...management.value.arrivalWeeks.map(w=>w.count??0)))
+const freightMax=computed(()=>Math.max(1,...management.value.freight.months.map(m=>m.airFreight??0)))
+const arrivalColors=['#1e40af','#f97316','#7793a7']
+const arrivalRange=w=>w.start.slice(5).replace('-','/')+'–'+w.end.slice(5).replace('-','/')
+const age=computed(()=>[[0,15],[16,30],[31,60],[61,90],[91,Infinity]].map(([min,max])=>({label:max===Infinity?'>90':`${min}–${max}`,rows:management.value.open.filter(o=>{const d=(Date.parse(TODAY)-Date.parse(o.created))/86400000;return d>=min&&d<=max})})))
 const ageSeries=computed(()=>[
   {key:'生产订单',title:tr('生产'),color:'#256b9a'},
   {key:'售后配件',title:tr('售后'),color:'#13a394'},
@@ -139,32 +167,96 @@ function exportExceptionView(){
 <template>
 <div class="ops">
   <template v-if="view==='overview'">
-    <div class="ops-toolbar ops-overview-toolbar"><div class="ops-title"><h1>{{tr('总览看板')}}</h1><small>{{TODAY}}<template v-if="!imported"> · {{l('模拟业务快照','Simulated snapshot')}}</template></small></div><div v-if="imported" class="ops-ledger-nav" role="group" :aria-label="l('完整台账','Full ledger')"><button v-for="v in orderViews.slice(0,4)" :key="v.key" @click="inspect(v.records,v.title)">{{v.title}} <b>{{v.records.length.toLocaleString()}}</b><ArrowUpRight :size="13"/></button></div><div class="ops-filters"><select v-if="role==='buyer'" v-model="supplier" :aria-label="tr('供应商')"><option value="">{{tr('全部供应商')}}</option><option v-for="s in [...new Set(orders.map(o=>o.supplier))]" :key="s">{{s}}</option></select><select v-model="purpose" :aria-label="tr('订单类型')"><option value="">{{l('全部用途','All purposes')}}</option><option value="生产订单">{{tr('生产订单')}}</option><option value="售后配件">{{tr('售后配件')}}</option><option v-if="imported" value="用途待确认">{{l('用途待确认','Purpose unconfirmed')}}</option></select><Button variant="outline" @click="emit('reset')"><RefreshCw :size="14"/>{{tr('重置演示')}}</Button></div></div>
-    <div class="ops-kpis">
-      <button @click="inspect(summary.open,l('未完成订单','Open orders'))"><small>{{l('未完成 PO／订单行','Open POs / lines')}}</small><strong>{{summary.poCount}}<span>/ {{summary.open.length}}</span></strong><footer>{{imported?l('按台账剩余待发口径','Ledger remaining dispatch basis'):l('未全部收货','Not fully received')}}<ArrowUpRight :size="15"/></footer></button>
-      <button class="featured" @click="inspect(summary.transitRows.map(r=>r.order),l('已核实在途','Verified in transit'))"><small>{{l('已核实在途批次','Verified transit batches')}}</small><strong>{{imported?'—':summary.transit.length}}<span>{{l('批','batches')}}</span></strong><footer>{{imported?l('等待 SAP 与物流核对','Awaiting SAP / logistics verification'):money(summary.transitValue)+' · AUD'}}<ArrowUpRight :size="15"/></footer></button>
-      <button @click="inspect(scope.filter(o=>remainingQty(o)>0),l('剩余待发','Remaining to dispatch'))"><small>{{l('剩余待发行','Lines awaiting dispatch')}}</small><strong>{{scope.filter(o=>remainingQty(o)>0).length}}<span>{{tr('行')}}</span></strong><footer>{{l('按报发量计算','Based on reported dispatch')}}<ArrowUpRight :size="15"/></footer></button>
-      <button @click="inspect(summary.risk,tr('交期风险'))"><small>{{tr('交期风险')}}</small><strong class="ops-amber">{{summary.risk.length}}<span>{{tr('行')}}</span></strong><footer>{{l('发运承诺／到仓风险','Dispatch / arrival risk')}}<ArrowUpRight :size="15"/></footer></button>
-      <button @click="inspect(summary.known,l('已确认价格覆盖','Confirmed price coverage'))"><small>{{l('已确认未交货值 · AUD','Confirmed open value · AUD')}}</small><strong class="value">{{summary.known.length?money(summary.openValue):'—'}}</strong><footer>{{summary.known.length}} / {{summary.open.length}} {{l('行已覆盖','lines covered')}}<ArrowUpRight :size="15"/></footer></button>
+    <div class="ops-toolbar ops-overview-toolbar manager-toolbar">
+      <div class="ops-title"><h1>{{tr('总览看板')}}</h1><small>{{l('截至','As of')}} {{TODAY}}<template v-if="!imported"> · {{l('演示','Demo')}}</template></small></div>
+      <div class="ops-filters"><select v-if="role==='buyer'" v-model="supplier" :aria-label="tr('供应商')"><option value="">{{tr('全部供应商')}}</option><option v-for="s in [...new Set(orders.map(o=>o.supplier))]" :key="s">{{s}}</option></select><select v-model="purpose" :aria-label="tr('订单类型')"><option value="">{{l('全部用途','All purposes')}}</option><option value="生产订单">{{tr('生产订单')}}</option><option value="售后配件">{{tr('售后配件')}}</option><option v-if="imported" value="用途待确认">{{l('用途待确认','Purpose unconfirmed')}}</option></select><Button variant="outline" @click="inspect(scope,l('当前范围订单','Orders in scope'))">{{l('查看订单','View orders')}}<ArrowRight :size="14"/></Button></div>
     </div>
-    <div class="ops-summary-grid">
-      <section class="ops-panel"><header><h2>{{imported?l('未完成订单运输','Open orders by transport'):l('运输与数量','Transport & quantities')}}</h2><Badge theme="blue">{{l('单位分组','By unit')}}</Badge></header><div class="ops-mode" v-for="m in transport" :key="m.mode"><button class="ops-chart-row" @click="inspect(m.rows.map(r=>r.order),tr(m.mode))"><span class="ops-chart-label"><component :is="m.mode==='海运'?Ship:Plane" :size="16"/><b>{{tr(m.mode)}}</b></span><span class="ops-chart-track" aria-hidden="true"><i :style="{width:percent(m.count,imported?summary.open.length:summary.transit.length)+'%',background:m.mode==='海运'?'#256b9a':m.mode==='空运'?'#13a394':'#7793a7'}"></i></span><span class="ops-chart-value"><b>{{m.count}}</b> {{imported?l('行','lines'):l('批','batches')}}</span></button><small class="ops-chart-detail">{{groupLabel(m.groups)}}<template v-if="m.value!==null"> · {{money(m.value)}}</template></small></div><div class="ops-inline-note"><span>{{l('剩余待发','Remaining to dispatch')}}</span><b>{{groupLabel(summary.remaining)}}</b></div><div class="ops-inline-note"><span>{{l('SAP 已收货','SAP receipts')}}</span><b>{{groupLabel(summary.received)}}</b></div></section>
-      <section class="ops-panel"><header><h2>{{l('订单用途与来源','Purpose & source')}}</h2><small>{{summary.open.length}} {{tr('行')}}</small></header><button v-for="p in (imported?['生产订单','售后配件','用途待确认']:['生产订单','售后配件'])" :key="p" class="ops-category ops-chart-row" @click="inspect(summary.open.filter(o=>o.type===p),tr(p))"><span class="ops-chart-label"><b>{{p==='用途待确认'?l('用途待确认','Purpose unconfirmed'):tr(p)}}</b></span><span class="ops-chart-track" aria-hidden="true"><i :style="{width:percent(summary.open.filter(o=>o.type===p).length,summary.open.length)+'%',background:p==='生产订单'?'#256b9a':p==='售后配件'?'#13a394':'#7793a7'}"></i></span><span class="ops-chart-value"><b>{{summary.open.filter(o=>o.type===p).length}}</b> {{tr('行')}}</span></button><div class="ops-source-grid"><button v-for="s in summary.source" :key="s.key" @click="inspect(s.rows,l(s.key==='buy'?'外购件':'自制件',s.key==='buy'?'Purchased':'In-house'))"><small>{{l(s.key==='buy'?'外购件':'自制件',s.key==='buy'?'Purchased':'In-house')}}</small><strong>{{s.rows.length}} <small>{{tr('行')}}</small></strong></button></div></section>
-      <section class="ops-panel ops-age-panel">
-        <header><h2>{{tr('未完成订单账龄')}}</h2><small>{{l('订单行','Order lines')}}</small></header>
-        <div class="ops-age-legend"><span v-for="s in ageSeries" :key="s.key"><i :style="{background:s.color}" aria-hidden="true"></i>{{s.title}}</span></div>
-        <div class="ops-age-chart">
-          <button v-for="a in ageChart" :key="a.label" class="ops-age-row" :aria-label="ageDescription(a)" :title="ageDescription(a)" @click="inspect(a.rows,a.label)">
-            <span class="ops-age-label">{{a.label}}<small>{{l('天','d')}}</small></span>
-            <span class="ops-age-track" aria-hidden="true"><span v-for="s in a.segments" :key="s.key" class="ops-age-segment" :style="{width:(s.count/ageMax*100)+'%',background:s.color}" :title="s.title+' '+s.count"><span v-if="s.count && s.count/ageMax>=0.14">{{s.count}}</span></span></span>
-            <b class="ops-age-total">{{a.rows.length}}</b>
-          </button>
-          <div class="ops-age-axis" aria-hidden="true"><span>0</span><span>{{ageMax/2}}</span><span>{{ageMax}}</span></div>
+    <div class="ops-kpis manager-kpis">
+      <button @click="inspect(management.delayed,l('明确延期订单','Orders with evidenced delays'))"><small>{{l('交期延期','Delivery delays')}}</small><strong :class="{'ops-amber':management.delayed.length}">{{management.delayed.length.toLocaleString()}}<span>{{tr('行')}}</span></strong></button>
+      <button @click="inspect(management.noDate,l('待补发运承诺','Dispatch dates to confirm'))"><small>{{l('承诺待确认','Dates to confirm')}}</small><strong>{{management.noDate.length.toLocaleString()}}<span>{{tr('行')}}</span></strong></button>
+      <button @click="inspect(management.unverifiedDispatch,l('报发待核实','Dispatch to verify'))"><small>{{l('报发待核实','Dispatch to verify')}}</small><strong>{{management.unverifiedDispatch.length.toLocaleString()}}<span>{{tr('行')}}</span></strong></button>
+      <button :title="l('含已取消','Includes cancelled')+' '+management.totals.cancelled.length+' '+tr('行')" @click="inspect(management.totals.rows,l('总订单','All orders'))"><small>{{l('总订单','Total orders')}}</small><strong>{{management.totals.rows.length.toLocaleString()}}<span>{{tr('行')}}</span></strong><span class="manager-kpi-meta">{{management.totals.poCount}} PO</span></button>
+      <button :title="management.transitKnown?l('已核实 · SAP 与物流已关联','Verified · SAP and logistics linked'):l('待核实运输状态','Transport verification pending')" @click="management.transitKnown?inspect(management.transitOrders,l('在途订单','In-transit orders')):emit('navigate','shipments')"><small>{{l('在途订单','In transit')}}<span class="manager-kpi-basis">{{management.transitKnown?l('已核实','Verified'):l('待核实','Unverified')}}</span></small><strong>{{management.transitKnown?management.transitOrders.length.toLocaleString():'—'}}<span>{{tr('行')}}</span></strong></button>
+      <button :title="l('业务报发 · 含部分发货','Reported · includes partial dispatch')" @click="inspect(management.totals.dispatched,l('已发货（业务报发）','Dispatched (reported)'))"><small>{{l('已发货','Dispatched')}}<span class="manager-kpi-basis">{{l('业务报发','Reported')}}</span></small><strong>{{management.totals.dispatched.length.toLocaleString()}}<span>{{tr('行')}}</span></strong></button>
+      <button :title="management.totals.receiptUnknown.length?l('待核实','Awaiting verification')+' '+management.totals.receiptUnknown.length+' '+tr('行'):l('SAP 收货 · 含部分收货','SAP receipts · includes partial receipts')" @click="inspect(management.totals.received,l('已收货（已核实）','Received (verified)'))"><small>{{l('已收货','Received')}}<span class="manager-kpi-basis">{{management.totals.receiptUnknown.length?l('待核实','Unverified'):l('SAP 收货','SAP receipts')}}</span></small><strong>{{management.totals.received.length||!management.totals.receiptUnknown.length?management.totals.received.length.toLocaleString():'—'}}<span>{{tr('行')}}</span></strong></button>
+    </div>
+
+    <div class="ops-panel manager-structure-scroll">
+      <div class="manager-structure-group">
+      <section class="ops-panel manager-flow-panel manager-structure-flow">
+        <header><h2>{{l('供应链流转','Supply chain flow')}}</h2><Button variant="ghost" @click="emit('navigate','shipments')">{{l('物流详情','Logistics')}}<ArrowRight :size="14"/></Button></header>
+        <div class="manager-route" :aria-label="l('中国经海运或空运至澳洲','China to Australia by sea or air')">
+          <div class="manager-place"><span class="manager-place-icon"><Factory :size="29"/></span><b>{{l('中国','China')}}</b></div>
+          <div class="manager-route-path"><div><Ship :size="20"/><span></span><ArrowRight :size="14"/></div><div><Plane :size="20"/><span></span><ArrowRight :size="14"/></div></div>
+          <div class="manager-place"><span class="manager-place-icon"><Warehouse :size="29"/></span><b>{{l('澳洲','Australia')}}</b></div>
+        </div>
+        <div class="manager-flow-metrics">
+          <button @click="inspect(management.pending,l('待发订单','Orders awaiting dispatch'))"><small>{{l('待发','To dispatch')}}</small><strong>{{management.pending.length}}<span>{{tr('行')}}</span></strong></button>
+          <button @click="management.transitKnown?inspect(management.transitOrders,l('已核实在途','Verified in transit')):emit('navigate','shipments')"><small>{{l('已核实在途','Verified transit')}}</small><strong>{{management.transitKnown?management.verified.length:'—'}}<span>{{l('批','batches')}}</span></strong></button>
+          <button @click="management.arrivalsKnown?inspect(management.upcomingOrders,l('未来七天到仓','Arrivals in the next 7 days')):emit('navigate','shipments')"><small>{{l('7天到仓 · ETA','7-day arrivals · ETA')}}</small><strong>{{management.arrivalsKnown?management.upcoming.length:'—'}}<span>{{l('批','batches')}}</span></strong></button>
         </div>
       </section>
+        <section class="manager-purpose-section">
+          <header><h2>{{l('订单分类','Order categories')}}</h2></header>
+          <div class="manager-purpose-cards">
+            <button v-for="m in purposeRows.filter(m=>m.key!=='用途待确认'||m.rows.length)" :key="m.key" class="manager-purpose-card" :aria-label="m.title+' '+m.rows.length+' '+tr('行')+' · '+percent(m.rows.length,management.open.length)+'%'" @click="inspect(m.rows,m.title)">
+              <b>{{m.title}}</b><span><Factory v-if="m.key==='生产订单'" :size="29"/><Wrench v-else :size="29"/><strong>{{m.rows.length}}</strong></span><small>{{percent(m.rows.length,management.open.length)}}%</small>
+            </button>
+          </div>
+        </section>
+      <section class="ops-panel ops-age-panel manager-age-detail manager-structure-age">
+        <header><h2>{{tr('未完成订单账龄')}}</h2><small>{{l('订单行','Order lines')}}</small></header>
+        <button class="manager-age-highlight" @click="inspect(management.aged,l('超过60天未完成','Open for more than 60 days'))"><span>{{l('超过60天','Over 60 days')}}</span><b>{{management.aged.length}} <small>{{tr('行')}}</small></b><ArrowUpRight :size="13"/></button>
+
+        <div class="ops-age-chart">
+          <div class="manager-age-heading"><span>{{l('天数','Days')}}</span><span></span><span v-for="s in ageSeries" :key="s.key" :style="{color:s.color}">{{s.title}}</span><span>{{tr('合计')}}</span></div>
+          <button v-for="a in ageChart" :key="a.label" class="ops-age-row" :aria-label="ageDescription(a)" :title="ageDescription(a)" @click="inspect(a.rows,a.label)">
+            <span class="ops-age-label">{{a.label}}<small>{{l('天','d')}}</small></span>
+            <span class="ops-age-track" aria-hidden="true"><span v-for="s in a.segments" :key="s.key" class="ops-age-segment" :style="{width:(s.count/ageMax*100)+'%',background:s.color}" :title="s.title+' '+s.count"></span></span>
+            <span v-for="s in a.segments" :key="s.key" class="manager-age-count" :style="{color:s.count?s.color:undefined}">{{s.count}}</span>
+            <b class="ops-age-total">{{a.rows.length}}</b>
+          </button>
+          <div class="manager-age-totals"><span>{{tr('合计')}}</span><span></span><b v-for="s in ageSeries" :key="s.key" :style="{color:s.color}">{{ageChart.reduce((sum,a)=>sum+a.segments.find(segment=>segment.key===s.key).count,0)}}</b><b>{{ageChart.reduce((sum,a)=>sum+a.rows.length,0)}}</b></div>
+          <small v-if="management.ageingUnknown.length">{{management.ageingUnknown.length}} {{l('行创建日期待核实，未计入分布','lines need a valid creation date; excluded from this chart')}}</small>
+        </div>
+      </section>
+        <section class="manager-transport-section">
+          <header><h2>{{l('运输方式与数量','Transport & volume')}}</h2></header>
+          <button v-for="m in transportRows.filter(m=>['海运','空运'].includes(m.key)||m.rows.length)" :key="m.key" class="manager-transport-stat" :style="{'--mode-color':m.color}" :aria-label="m.title+' '+m.rows.length+' '+tr('行')+' · '+percent(m.rows.length,management.open.length)+'%'" @click="inspect(m.rows,m.title)">
+            <b>{{m.title}}</b><span><Ship v-if="m.key==='海运'" :size="25"/><Plane v-else-if="m.key==='空运'" :size="25"/><Package v-else :size="25"/><strong>{{m.rows.length}}</strong><small>({{percent(m.rows.length,management.open.length)}}%)</small></span>
+          </button>
+          <div class="manager-transport-pie" role="img" :aria-label="transportRows.map(m=>m.title+' '+percent(m.rows.length,management.open.length)+'%').join(' · ')" :style="{background:transportPie.background}">
+            <span v-for="m in transportPie.segments.filter(m=>m.end-m.start>=8)" :key="m.key" :style="{left:m.x+'%',top:m.y+'%'}">{{percent(m.rows.length,management.open.length)}}%</span><span v-if="!management.open.length" class="manager-pie-empty">—</span>
+          </div>
+          <div class="manager-transport-legend"><span v-for="m in transportRows.filter(m=>['海运','空运'].includes(m.key)||m.rows.length)" :key="m.key"><i :style="{background:m.color}"></i>{{m.title}}</span></div>
+        </section>
+      </div>
     </div>
-    <div class="ops-bottom-grid"><section class="ops-panel"><header><h2>{{l('近期装运与到仓','Upcoming shipments & arrivals')}}</h2><Button variant="ghost" @click="emit('navigate','shipments')">{{l('全部批次','All batches')}}<ArrowRight :size="14"/></Button></header><div class="ops-scroll"><table><thead><tr><th>{{l('批次／运输','Batch / mode')}}</th><th>{{l('数量 · 原单位','Quantity · original unit')}}</th><th>{{l('SAP 状态','SAP status')}}</th><th>{{l('澳洲到仓 ETA','AU warehouse ETA')}}</th><th></th></tr></thead><tbody><tr v-for="s in summary.batches.slice().sort((a,b)=>(a.eta||'9999').localeCompare(b.eta||'9999')).slice(0,3)" :key="s.id"><td><b>{{s.id}}</b><small>{{tr(s.mode)}} · {{s.ref}}</small></td><td>{{shipmentGroups(s)}}</td><td><Badge :theme="s.sapPosted?'green':'orange'">{{l(s.sapPosted?'已关联过账':'报发待核实',s.sapPosted?'PGI linked':'Report unverified')}}</Badge></td><td>{{s.eta?dateLabel(s.eta):l('待补充','Not provided')}}<small v-if="shipmentDelayed(s)" class="ops-amber">{{l('延期跟进','Delay follow-up')}} {{delayDays(s)>0?'+'+delayDays(s)+'d':''}}</small></td><td><button class="ops-link" @click="open(allocations(s).find(a=>order(a.order)).order,'logistics')" :aria-label="l('查看批次','View batch')"><ArrowUpRight :size="17"/></button></td></tr></tbody></table></div><p v-if="!summary.batches.length" class="ops-empty">{{l('当前范围暂无装运批次','No shipments in this scope')}}</p></section><section class="ops-panel"><header><h2>{{l('需要关注','Attention needed')}}</h2><CircleAlert :size="17"/></header><button class="ops-attention" @click="inspect(scope.filter(o=>summary.unresolved.some(c=>c.order===o.id)),l('待处理订单','Orders needing action'))"><span>{{l('涉及订单行','Affected order lines')}}</span><b>{{new Set(summary.unresolved.map(c=>c.order)).size}}</b><ArrowUpRight :size="14"/></button><button class="ops-attention" @click="emit('navigate','exceptions')"><span>{{l('未关闭事项','Open tasks')}}</span><b>{{summary.unresolved.length}}</b><ArrowRight :size="14"/></button><button class="ops-attention" @click="inspect(summary.unpriced,l('价格待确认','Price verification'))"><span>{{l('货值暂未覆盖','Value not yet covered')}}</span><b>{{summary.unpriced.length}} {{tr('行')}}</b><ArrowUpRight :size="14"/></button><button class="ops-attention" @click="emit('navigate',role==='buyer'?'data':'shipments')"><span>{{l('报发待 SAP 核实','Reports awaiting SAP')}}</span><b>{{summary.pendingBatches.length}} {{l('批','batches')}}</b><ArrowRight :size="14"/></button></section></div>
-    <details class="ops-definitions"><summary>{{l('统计口径与数据来源','Definitions & data sources')}}</summary><p>{{l('台账已报发不代表 SAP 已收货。货值仅包括已确认价格；单位或关联不明的数量不相加。在途须有 SAP 及物流依据。','Ledger dispatch does not prove SAP receipt. Value includes confirmed prices only; unverified units or links are excluded from quantity sums. Transit requires SAP and logistics evidence.')}}</p></details>
+    <div class="manager-bottom-grid manager-planning-grid">
+      <section class="ops-panel manager-arrivals-panel">
+        <header><h2>{{l('未来四周预计到仓','Expected arrivals · next 4 weeks')}}</h2><small>{{l('已核实批次','Verified batches')}}</small></header>
+        <div class="manager-week-chart">
+          <button v-for="week in management.arrivalWeeks" :key="week.start" class="manager-week-column" :disabled="week.count===null||week.count===0" :aria-label="arrivalRange(week)+' · '+(week.count===null?l('待核实','Unverified'):week.count+' '+l('批','batches'))" @click="inspect(week.rows,l('预计到仓','Expected arrivals')+' '+arrivalRange(week))">
+            <strong>{{week.count===null?'—':week.count}}</strong>
+            <span class="manager-week-track" :class="{'is-unknown':week.count===null}" aria-hidden="true"><span v-for="(mode,index) in week.modes" :key="mode.mode" :style="{height:(mode.count/arrivalMax*100)+'%',background:arrivalColors[index]}"></span></span>
+            <small>{{arrivalRange(week)}}</small>
+          </button>
+        </div>
+        <div class="manager-planning-legend"><span v-for="(mode,index) in [l('海运','Sea'),l('空运','Air'),l('其他','Other')]" :key="mode"><i :style="{background:arrivalColors[index]}"></i>{{mode}}</span><small v-if="!management.arrivalsKnown">{{l('ETA 待核实','ETA unverified')}}</small><small v-else-if="management.missingEta.length">{{l('ETA 待补','Missing ETA')}} {{management.missingEta.length}} {{l('批','batches')}}</small></div>
+      </section>
+      <section class="ops-panel manager-cost-panel">
+        <header><h2>{{l('空运成本与货值','Air freight cost & value')}} <span v-if="management.freight.ytd.airFreight===null||management.freight.ytd.airValue===null||management.freight.ytd.totalFreight===null" class="manager-data-badge">{{l('待补充','Incomplete')}}</span></h2><small>{{TODAY.slice(0,4)}} {{l('已登记 · AUD','Recorded · AUD')}}</small></header>
+        <div class="manager-cost-grid"><div v-for="metric in costMetrics" :key="metric.label"><small>{{metric.label}}</small><strong>{{metric.value}}</strong></div></div>
+        <div class="manager-freight-trend-heading"><b>{{l('空运费月度变化','Monthly air freight')}}</b><small>{{l('最近6个完整月','Last 6 complete months')}} · AUD</small></div>
+        <div class="manager-freight-chart">
+          <div v-for="month in management.freight.months" :key="month.month" class="manager-month-column" :title="month.month+' · '+l('空运费','Air freight')+' '+formatAmount(month.airFreight)+' · '+l('运费占比','Freight share')+' '+formatRate(month.airShare)">
+            <strong>{{formatAmount(month.airFreight)}}</strong><span class="manager-month-track" :class="{'is-unknown':month.airFreight===null}"><i :style="{height:((month.airFreight??0)/freightMax*100)+'%'}"></i></span><small>{{month.month}}</small>
+          </div>
+        </div>
+        <div class="manager-cost-changes"><span>{{management.freight.months.at(-1).month}} {{l('较上月','vs previous month')}}</span><span>{{l('空运费','Air freight')}} <b>{{formatChange(management.freight.monthChange)}}</b></span><span>{{l('运费占比','Freight share')}} <b>{{formatChange(management.freight.shareChange,' '+l('个百分点','pp'))}}</b></span></div>
+      </section>
+    </div>
+    <details class="ops-definitions manager-definitions"><summary>{{l('统计说明','Definitions')}}</summary><p>{{l('报发待核实包括缺少 SAP 发货依据、报发量超出过账量或存在未过账批次的订单行。总订单包含取消行，PO 为去重订单数。已发货按业务报发统计，含部分发货；已收货按已核实收货统计，含部分收货。结构图占比以筛选后的未完成订单行为分母。— 表示待核实或待接入，并非零。','Dispatch to verify includes missing SAP dispatch evidence, reports exceeding PGI or unposted batches. Total lines include cancellations; PO counts are unique. Dispatched counts use reported dispatch, including partial dispatch; received counts use verified receipts, including partial receipts. Mix percentages use filtered open lines. — means unverified or unavailable, not zero.')}}</p><p>{{l('当前快照按所选供应商与用途统计。未完成订单采用台账剩余待发口径（演示数据采用未收货口径）；状态可能重叠，订单行与批次不可相加。明确延期依据已过发运承诺、到仓日期偏差或已登记延期；仅缺少日期不算延期。图表账龄从订单创建日计算，不等于逾期天数。','Current snapshot uses the selected supplier and purpose. Imported open orders use remaining ledger dispatch; demo orders use outstanding receipts. States may overlap; lines and batches are not additive. Delays require overdue dispatch commitments, arrival-date variance or recorded delays; missing dates alone are not delays. Ageing runs from creation, not from the due date.')}}</p><p>{{l('在途仅计已关联 SAP 过账和物流节点的实际批次，累计报发与删除记录不计入。未来7天包括今天，仅展示已核实且有 ETA 的批次；缺少依据显示 —。未来四周从今天起按连续七天分组，以批次计数，不混加不同单位的数量。','Transit requires actual batches with SAP PGI and logistics milestones; aggregate and deleted records are excluded. The next 7 days includes today and only verified batches with an ETA; unavailable evidence is shown as —. The next four weeks use consecutive seven-day windows starting today. Counts use batches, not sums of incompatible quantity units.')}}</p><p>{{l('费用仅统计所选范围内已登记的实际批次，按 SAP 过账日（无则发运日或报发日）归属期间。年度指标截至今天；趋势使用最近六个完整月份，环比比较最近两个完整月份。运费须明确为 AUD，空运货值按已确认 AUD 单价及价格单位计算。缺日期、缺费用币种或跨筛选范围且未拆分费用的批次不视为零；未登记月份和上月为零时不计算百分比环比。','Costs use recorded actual batches in scope, dated by SAP PGI, then dispatch or reported date. Annual figures run through today; trends use six complete months and changes compare the latest two. Freight requires explicit AUD currency; air cargo value uses confirmed AUD prices and price units. Missing dates, currencies or unallocated costs on shared batches are not zero. Unrecorded months and zero prior-month costs have no percentage change.')}}</p></details>
   </template>
 
   <template v-else-if="view==='orders'">

@@ -7,6 +7,7 @@ import { parse, compileScript } from '@vue/compiler-sfc'
 import { parse as parseJS } from '@babel/parser'
 import * as domain from '../src/domain.mjs'
 import * as analytics from '../src/analytics.mjs'
+import * as managerOverview from '../src/manager-overview.mjs'
 import * as i18n from '../src/i18n.mjs'
 import * as translations from '../src/translations.mjs'
 import * as reconciliation from '../src/reconciliation.mjs'
@@ -28,7 +29,7 @@ function component(file, expose=''){
   if(expose)source=source.replace('</script>',`\ndefineExpose({${expose}})\n</script>`)
   const {descriptor}=parse(source)
   let code=compileScript(descriptor,{id:file,inlineTemplate:true,genDefaultAs:'compiledComponent'}).content
-  const imports={vue:Vue,'./sap-reference.mjs':sapReference,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
+  const imports={vue:Vue,'./manager-overview.mjs':managerOverview,'./sap-reference.mjs':sapReference,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
     './exception-export.mjs':{downloadExceptions:(...args)=>exceptionDownload(...args)},
     './parts-workbook-download.mjs':{createPartsExportWorker(){throw new Error('No downloads in SSR tests')}},
     './parts-workbook.mjs':partsWorkbook,'./parts-workbook-store.mjs':{...partsWorkbookStore,createPartsWorkbookStore:(...args)=>workbookStoreFactory(...args)},

@@ -159,6 +159,75 @@ html[lang="en"] .ops-chart-row{grid-template-columns:104px minmax(0,1fr) 54px}
 .ops-check-counts{grid-template-columns:repeat(3,minmax(0,1fr))}
 .analysis-footer{justify-content:flex-end}
 .cloud-title{align-items:center}
+/* Manager overview: aggregate business decisions with drill-through to operations. */
+.manager-toolbar{margin-bottom:12px}
+.ops-kpis.manager-kpis{grid-template-columns:repeat(7,minmax(145px,1fr));overflow-x:auto}
+.ops-kpis.manager-kpis>button{position:relative;padding:12px 14px 28px;min-height:104px}
+.ops-kpis.manager-kpis strong{margin:7px 0 0}
+.manager-kpi-meta{position:absolute;right:14px;bottom:10px;font-size:12px;color:#748795}
+.manager-status-strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px;margin:-2px 0 12px;padding:0 3px;font-size:12px;color:#748795}
+.manager-status-strip button{display:flex;align-items:center;gap:5px}
+.manager-status-strip button:hover{color:#256b9a}
+.manager-status-strip b{font-size:15px;color:#31566b}
+.manager-main-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.manager-bottom-grid{display:grid;grid-template-columns:1.08fr 1fr;gap:12px;margin-bottom:8px}
+.manager-route{display:grid;grid-template-columns:80px minmax(60px,1fr) 80px;align-items:center;gap:10px;padding:23px 22px 16px}
+.manager-place{display:flex;flex-direction:column;align-items:center;gap:3px}
+.manager-place-icon{display:grid;place-items:center;width:52px;height:48px;border-radius:9px;background:#edf5f6;color:#246b72;margin-bottom:3px}
+.manager-place b{font-size:15px}
+.manager-place small{font-size:11px}
+.manager-route-path{display:grid;gap:17px}
+.manager-route-path>div{display:flex;gap:6px;align-items:center;color:#256b9a}
+.manager-route-path>div+div{color:#13a394}
+.manager-route-path span{flex:1;border-top:2px dashed currentColor;opacity:.45}
+.manager-route-path svg{flex-shrink:0}
+.manager-flow-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:0 12px;border-block:1px solid #e8eef2}
+.manager-flow-metrics button{padding:11px 4px;text-align:center;min-width:0}
+.manager-flow-metrics button+button{border-left:1px solid #e8eef2}
+.manager-flow-metrics button:hover{background:#f0f6fa}
+.manager-flow-metrics small{display:block;font-size:11px}
+.manager-flow-metrics strong{display:block;font-size:25px;margin-top:4px}
+.manager-flow-metrics strong span{font-size:11px;color:#748795;margin-left:4px;font-weight:400}
+.manager-mix-row{display:grid;grid-template-columns:83px minmax(0,1fr) 48px;gap:9px;align-items:center;width:100%;min-height:49px;padding:6px 12px;text-align:left}
+.manager-mix-row:hover{background:#f0f6fa}
+.manager-mix-name{font-size:13px;font-weight:550}
+.manager-mix-track{height:25px;border-left:1px solid #dce6ec}
+.manager-mix-track i{display:block;height:100%;border-radius:1px}
+.manager-mix-number{text-align:right;font-variant-numeric:tabular-nums}
+.manager-mix-number b{font-size:16px}
+.manager-mix-number small{display:block;font-size:11px}
+.manager-age-highlight{display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;background:#f5f8fa;text-align:left;font-size:12px;color:#536f80}
+.manager-age-highlight b{margin-left:auto;font-size:17px;color:#31566b}
+.manager-main-grid .ops-age-row{min-height:32px}
+.manager-main-grid .ops-age-track{height:23px}
+.manager-cost-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:20px 14px 14px;gap:12px}
+.manager-cost-grid>div{min-width:0}
+.manager-cost-grid small{display:block;min-height:36px;font-size:12px}
+.manager-cost-grid strong{display:block;font-size:28px;font-weight:500;color:#93a4ae;line-height:1.2;margin-bottom:10px}
+.manager-focus-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 13px;border-bottom:1px solid #edf2f5}
+.manager-focus-row:hover,.manager-supplier-focus:hover{background:#f0f6fa}
+.manager-focus-dot{width:6px;height:6px;border-radius:50%;background:#8ba4b3;flex-shrink:0}
+.manager-focus-dot.warning{background:#c68a36}
+.manager-focus-row>span:nth-child(2){flex:1;min-width:0}
+.manager-focus-row b{font-size:13px}
+.manager-focus-row small{display:block;font-size:11px}
+.manager-focus-row>strong{font-size:20px;white-space:nowrap}
+.manager-focus-row>strong small{display:inline;font-weight:400}
+.manager-focus-row>svg{flex-shrink:0;color:#748795}
+.manager-supplier-focus{display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;text-align:left;padding:10px 13px;font-size:11px;color:#748795}
+.manager-supplier-focus b{font-size:12px;color:#31566b;overflow-wrap:anywhere}
+.manager-supplier-focus>svg{margin-left:auto;flex-shrink:0}
+.manager-definitions{padding:5px 0}
+@media(max-width:1200px){
+  .manager-main-grid{grid-template-columns:1fr 1fr}
+  .manager-cost-grid{grid-template-columns:1fr 1fr;gap:18px 12px}
+  .manager-cost-grid small{min-height:0;margin-bottom:6px}
+}
+@media(max-width:750px){
+  .manager-main-grid,.manager-bottom-grid{grid-template-columns:1fr}
+  .manager-main-grid>.ops-age-panel{grid-column:auto}
+  .ops-kpis.manager-kpis>button:last-child{grid-column:auto}
+}
 @media(max-width:650px){
   .compact-page-heading{align-items:flex-start;margin-bottom:14px}
   .page-title-group{gap:4px 10px}
@@ -167,3 +236,90 @@ html[lang="en"] .ops-chart-row{grid-template-columns:104px minmax(0,1fr) 54px}
   .ops-check-counts>div{padding:9px 8px}
   .ops-toolbar .ops-title>small{display:block}
 }
+
+.manager-kpi-basis{position:absolute;right:14px;bottom:10px;font-size:11px;color:#738a9c;font-weight:400}
+.manager-data-badge{font-size:11px;color:#738a9c;font-weight:400;margin-left:6px}
+.manager-supplier-rank{display:grid;grid-template-columns:minmax(100px,1fr) minmax(40px,1fr) 30px 13px;align-items:center;gap:10px;width:100%;padding:14px 12px;text-align:left;font-size:12px}
+.manager-supplier-rank:hover{background:#f0f6fa}
+.manager-supplier-rank>span:first-child{overflow-wrap:anywhere}
+.manager-supplier-rank b{text-align:right;font-size:16px}
+.manager-supplier-track{height:18px;background:#f4f7f9}
+.manager-supplier-track i{display:block;height:100%;background:#c28e45;border-radius:1px}
+
+.manager-mix-panel .manager-mix-row{min-height:59px}
+.manager-age-detail .ops-age-row,.manager-age-heading,.manager-age-totals{display:grid;grid-template-columns:56px minmax(40px,1fr) repeat(3,34px) 34px;gap:7px;align-items:center}
+.manager-age-heading{font-size:11px;padding:9px 0 5px;color:#738a9c}
+.manager-age-heading>span:nth-child(n+3),.manager-age-count,.manager-age-totals>b{text-align:right;font-variant-numeric:tabular-nums}
+.manager-age-count{font-size:13px;color:#8a9aa5}
+.manager-age-totals{padding:8px 0 0;margin-top:5px;border-top:1px solid #e9eef2;font-size:13px}
+@media(max-width:500px){.manager-age-detail .ops-age-row,.manager-age-heading,.manager-age-totals{grid-template-columns:47px minmax(30px,1fr) repeat(3,28px) 28px;gap:4px}}
+
+.manager-structure-scroll{margin-bottom:12px;overflow-x:auto}
+.manager-structure-group{display:grid;grid-template-columns:minmax(260px,1.15fr) minmax(150px,.6fr) minmax(410px,1.55fr) minmax(180px,.7fr);min-width:1000px}
+.manager-structure-group>section{min-width:0}
+.manager-structure-group>section+section{border-left:1px solid #e3ebf0}
+.manager-structure-group>section>header{display:flex;align-items:center;justify-content:space-between;min-height:43px;padding:10px 12px;gap:8px}
+.manager-structure-group>section>header h2{font-size:14px}
+.manager-structure-group .manager-structure-age{border:0;border-left:1px solid #e3ebf0;border-radius:0}
+.manager-purpose-cards{display:grid;gap:10px;padding:0 10px 12px}
+.manager-purpose-card{display:flex;flex-direction:column;align-items:center;border:1px solid #dce6ec;border-radius:5px;padding:12px 8px;color:#173851;min-height:105px;gap:10px}
+.manager-purpose-card:hover{background:#f0f6fa;border-color:#85b4ca}
+.manager-purpose-card>b{font-size:12px;color:#21745f}
+.manager-purpose-card>span{display:flex;align-items:center;gap:12px}
+.manager-purpose-card strong{font-size:25px;line-height:1}
+.manager-purpose-card small{font-size:13px;font-weight:600}
+.manager-transport-stat{display:block;width:100%;padding:0 14px 10px;text-align:left}
+.manager-transport-stat>b{display:block;font-size:12px;color:var(--mode-color);margin-bottom:4px}
+.manager-transport-stat>span{display:flex;align-items:center;gap:8px}
+.manager-transport-stat svg{color:#173851;flex-shrink:0}
+.manager-transport-stat strong{font-size:23px}
+.manager-transport-stat small{font-size:11px;color:#173851}
+.manager-transport-stat:hover{background:#f0f6fa}
+.manager-transport-pie{position:relative;width:116px;height:116px;border-radius:50%;margin:0 auto 12px}
+.manager-transport-pie>span{position:absolute;transform:translate(-50%,-50%);color:#fff;font-size:13px;font-weight:600;white-space:nowrap}
+.manager-transport-pie .manager-pie-empty{left:50%;top:50%;color:#738a9c}
+.manager-transport-legend{display:flex;flex-wrap:wrap;justify-content:center;gap:7px 13px;padding:0 10px 12px;font-size:11px}
+.manager-transport-legend>span{display:flex;align-items:center;gap:5px}
+.manager-transport-legend i{width:8px;height:8px;border-radius:50%}
+.manager-structure-age .ops-age-row{min-height:36px}
+.manager-structure-age .ops-age-track{height:23px}
+.manager-support-grid{grid-template-columns:1fr}
+.manager-structure-group .manager-structure-flow{border:0;border-radius:0;display:flex;flex-direction:column}
+.manager-structure-flow .manager-route{flex:1;padding:24px 16px;grid-template-columns:60px minmax(40px,1fr) 60px;align-content:center}
+.manager-structure-flow .manager-flow-metrics{margin:0 12px 20px}
+.manager-structure-flow .manager-flow-metrics small{font-size:11px}
+.manager-structure-flow .manager-flow-metrics button{padding:12px 2px}
+.manager-support-grid .manager-cost-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.manager-support-grid .manager-cost-grid small{min-height:0;margin-bottom:6px}
+@media(max-width:1000px){.manager-support-grid .manager-cost-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:750px){.manager-support-grid{grid-template-columns:1fr}.manager-support-grid>.manager-supplier-panel{grid-column:auto}}
+
+.manager-planning-grid{grid-template-columns:minmax(340px,.85fr) minmax(480px,1.4fr)}
+.manager-week-chart{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;padding:20px 18px 12px}
+.manager-week-column{display:flex;flex-direction:column;align-items:center;gap:9px;min-width:0;padding:0;background:transparent}
+.manager-week-column:disabled{cursor:default}
+.manager-week-column:not(:disabled):hover{background:#f4f8fb}
+.manager-week-column>strong{font-size:21px;font-variant-numeric:tabular-nums}
+.manager-week-column>small{font-size:11px;white-space:nowrap}
+.manager-week-track{display:flex;flex-direction:column-reverse;width:60%;max-width:54px;height:150px;border-bottom:1px solid #dce6ec}
+.manager-week-track>span{display:block;flex-shrink:0;width:100%}
+.manager-week-track.is-unknown,.manager-month-track.is-unknown{border:1px dashed #dce6ec;background:#fafcfd;border-radius:3px}
+.manager-planning-legend{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:0 18px 15px;font-size:11px;color:#748795}
+.manager-planning-legend>span{display:flex;align-items:center;gap:5px}
+.manager-planning-legend i{width:8px;height:8px;border-radius:2px}
+.manager-planning-legend>small{margin-left:auto}
+.manager-planning-grid .manager-cost-grid{grid-template-columns:repeat(4,minmax(0,1fr));padding:14px 14px 10px;gap:8px}
+.manager-planning-grid .manager-cost-grid small{min-height:0;margin-bottom:8px;font-size:11px}
+.manager-planning-grid .manager-cost-grid strong{font-size:21px;color:#31566b;margin-bottom:0;overflow-wrap:anywhere}
+.manager-freight-trend-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px 0;border-top:1px solid #edf2f5;font-size:12px}
+.manager-freight-trend-heading>small{font-size:11px}
+.manager-freight-chart{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;padding:12px 14px 10px}
+.manager-month-column{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0}
+.manager-month-column>strong{font-size:11px;font-weight:500;color:#31566b;font-variant-numeric:tabular-nums}
+.manager-month-column>small{font-size:10px;white-space:nowrap}
+.manager-month-track{display:flex;align-items:flex-end;width:65%;max-width:38px;height:67px;border-bottom:1px solid #dce6ec}
+.manager-month-track i{display:block;width:100%;background:#f18a43;border-radius:2px 2px 0 0}
+.manager-cost-changes{display:flex;flex-wrap:wrap;gap:6px 16px;padding:8px 14px 11px;border-top:1px solid #edf2f5;font-size:11px;color:#748795}
+.manager-cost-changes b{color:#31566b;font-weight:550;margin-left:4px}
+@media(max-width:1150px){.manager-planning-grid{grid-template-columns:1fr}.manager-week-track{height:115px}}
+@media(max-width:600px){.manager-week-chart{gap:6px;padding:15px 10px 10px}.manager-week-column>small{font-size:10px}.manager-freight-chart{gap:5px;padding-inline:10px}.manager-planning-grid .manager-cost-grid{grid-template-columns:1fr 1fr}}
