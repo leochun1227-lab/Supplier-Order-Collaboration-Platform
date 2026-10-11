@@ -78,7 +78,9 @@ export function factsFor(o,shipments){
   ]
 }
 export function detectChecks(orders,shipments,today=TODAY){
-  const found=[]
+  const found=[], shipmentsByOrder=new Map()
+  for(const shipment of shipments)for(const id of new Set(allocations(shipment).map(a=>a.order))){if(!shipmentsByOrder.has(id))shipmentsByOrder.set(id,[]);shipmentsByOrder.get(id).push(shipment)}
+  const linkedShipments=o=>shipmentsByOrder.get(o.id)||[]
   const add=(o,kind,evidence,priority='中')=>found.push({id:`CHECK-${o.id}-${kind}`,order:o.id,kind,category:'数据问题',title:KINDS[kind],detail:evidence,owner:o.buyer,priority,due:today,status:'待处理',note:'',fingerprint:JSON.stringify([kind,evidence]),rule:true})
   for(const o of orders){
     if(o.imported){
@@ -112,19 +114,19 @@ export function detectChecks(orders,shipments,today=TODAY){
       if(initialChecks.length)add(o,'initialization',initialChecks.map(c=>`${c.title.zh} / ${c.title.en}`).join('; '))
       if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit}`)
       if(remainingQty(o)>0&&(!o.promisedEtd||o.promisedEtd<today||o.dispatchDelayStatus==='delayed'))add(o,'delivery',`${o.promisedEtd||'TBD'}; ${remainingQty(o)} ${o.unit}; ${o.dispatchDelayReason||''}`,'高')
-      const delayed=relatedShipments(o,shipments).filter(s=>shipmentDelayed(s,today))
+      const delayed=linkedShipments(o).filter(s=>shipmentDelayed(s,today))
       if(delayed.length)add(o,'logistics',delayed.map(s=>`${s.id}: ETA ${s.eta||'TBD'}; ${s.delayReason||'—'}`).join(' / '),'高')
       continue
     }
     if(o.so&&!mappingReady(o))add(o,'material',`${o.sapPart} / ${o.unit} ↔ ${o.soPart} / ${o.soUnit}`)
     if(!o.so)add(o,'reference',`${o.po} / ${o.item}`)
     if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice} / ${o.priceUnit||1} ${o.unit}`)
-    const unposted=relatedShipments(o,shipments).filter(s=>!s.sapPosted)
+    const unposted=linkedShipments(o).filter(s=>!s.sapPosted)
     if(reportedQty(o)!==o.shipped||unposted.length)add(o,'shipment',`${reportedQty(o)} ${o.unit} / SAP ${o.shipped} ${o.unit}; ${unposted.map(s=>s.id).join(', ')}`)
     if(remainingQty(o)>0&&(!o.promisedEtd||o.promisedEtd<today||o.dispatchDelayStatus==='delayed'))add(o,'delivery',`${o.promisedEtd||'TBD'}; ${remainingQty(o)} ${o.unit}; ${o.dispatchDelayReason||''}`,'高')
-    const delayed=relatedShipments(o,shipments).filter(s=>shipmentDelayed(s,today)&&allocations(s).some(a=>a.order===o.id&&a.qty>(a.receivedQty||0)))
+    const delayed=linkedShipments(o).filter(s=>shipmentDelayed(s,today)&&allocations(s).some(a=>a.order===o.id&&a.qty>(a.receivedQty||0)))
     if(delayed.length)add(o,'logistics',delayed.map(s=>`${s.id}: ETA ${s.eta||'TBD'}; ${s.delayReason||'—'}`).join(' / '),'高')
-    const allocated=relatedShipments(o,shipments).reduce((n,s)=>n+allocations(s).filter(a=>a.order===o.id).reduce((n,a)=>n+a.qty,0),0)
+    const allocated=linkedShipments(o).reduce((n,s)=>n+allocations(s).filter(a=>a.order===o.id).reduce((n,a)=>n+a.qty,0),0)
     const soDifferent=o.so&&mappingReady(o)&&Number.isFinite(o.soQty)&&Math.abs(o.soQty*(o.mapping?.factor||1)-o.qty)>0.000001
     if(soDifferent||o.received>o.shipped||reportedQty(o)>o.qty||o.shipped>o.qty||allocated>reportedQty(o)||[o.qty,o.shipped,o.received,reportedQty(o)].some(n=>!Number.isFinite(n)||n<0))add(o,'quantity',`${o.qty} / ${reportedQty(o)} / ${o.shipped} / ${o.received}; SO ${o.soQty}; allocated ${allocated}`,'高')
   }

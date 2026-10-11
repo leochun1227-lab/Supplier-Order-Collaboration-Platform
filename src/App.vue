@@ -75,11 +75,12 @@ const titles={orders:['订单工作台','从订单确认到交付，所有协作
 titles.parts=[{zh:'备品备件表格',en:'Parts workbook'},'']
 const visible=computed(()=>orders.value.filter(o=>canSee(o,role.value)))
 titles.overview=['总览看板','掌握订单、在途货物与交付风险。']
-const visibleIssues=computed(()=>allIssues.value.filter(i=>visible.value.some(o=>o.id===i.order)||role.value==='buyer'&&i.sourceRecord))
-const activeIssues=computed(()=>visibleIssues.value.filter(i=>i.status!=='已解决'&&!isHistoricalOrder(visible.value.find(o=>o.id===i.order))))
+const visibleById=computed(()=>new Map(visible.value.map(o=>[o.id,o])))
+const visibleIssues=computed(()=>allIssues.value.filter(i=>visibleById.value.has(i.order)||role.value==='buyer'&&i.sourceRecord))
+const activeIssues=computed(()=>visibleIssues.value.filter(i=>i.status!=='已解决'&&!isHistoricalOrder(visibleById.value.get(i.order))))
 const exceptionCount=computed(()=>visibleIssues.value.filter(i=>i.status!=='已解决'&&isException(i)).length)
 const todoCount=computed(()=>activeIssues.value.filter(i=>!isException(i)).length)
-const visibleShipments=computed(()=>shipments.value.filter(s=>!s.deletedAt).filter(s=>allocations(s).some(a=>visible.value.some(o=>o.id===a.order))))
+const visibleShipments=computed(()=>shipments.value.filter(s=>!s.deletedAt).filter(s=>allocations(s).some(a=>visibleById.value.has(a.order))))
 const pending=computed(()=>visible.value.filter(o=>o.pending))
 const unconfirmed=computed(()=>visible.value.filter(o=>!o.confirmed))
 const openOrders=computed(()=>visible.value.filter(o=>openQty(o)>0))

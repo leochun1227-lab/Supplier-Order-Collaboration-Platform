@@ -76,7 +76,7 @@ test('the default landing page is the overview dashboard',async()=>{
   assert.equal(result.state.page.value,'overview')
   assert.match(result.html,/总览看板/)
 })
-test('parts grid renders every source row in one scrolling table with column filters visible by default',async()=>{
+test('parts grid bounds rendered rows while keeping column filters and the full workbook',async()=>{
   const source=JSON.parse(fs.readFileSync(new URL('../public/parts-workbook.json',import.meta.url),'utf8'))
   const Parts=component('PartsWorkbook.vue','book, sheetId, loading')
   async function grid(sheetId){
@@ -89,12 +89,12 @@ test('parts grid renders every source row in one scrolling table with column fil
   assert.match(html,/Sheet2/)
   assert.match(html,/AA/)
   assert.match(html,/导出 Excel|Export Excel/)
-  assert.equal((html.match(/data-cell/g)||[]).length,33861)
+  assert.equal((html.match(/data-cell/g)||[]).length,2730)
   assert.equal((html.match(/aria-haspopup="dialog"/g)||[]).length,27)
   assert.equal((html.match(/class="pw-resize-column"/g)||[]).length,27)
-  assert.equal((html.match(/class="pw-resize-row"/g)||[]).length,1256)
-  assert.match(html,/>1256</)
-  assert.doesNotMatch(html,/pw-pagination|Rows per page|每页行数/)
+  assert.equal((html.match(/class="pw-resize-row"/g)||[]).length,103)
+  assert.match(html,/1256/)
+  assert.match(html,/pw-pagination/)
   const summary=await grid('s1')
   assert.match(summary,/取消订单/)
   assert.equal((summary.match(/data-cell/g)||[]).length,75)
@@ -651,4 +651,36 @@ test('the separate task page can paginate beyond its first forty tasks',async()=
   const issues=Array.from({length:41},(_,i)=>({id:'todo-'+i,kind:'delivery',order:order.id,status:'待处理',title:'Follow-up '+i}))
   const html=await renderToString(Vue.createSSRApp(component('Operations.vue'),{view:'todos',orders:[order],issues,shipments:[],role:'buyer'}))
   assert.match(html,/class="ops-pagination"/);assert.match(html,/41 records · 1 \/ 2/);assert.match(html,/Next/)
+})
+
+
+test('8,400 workbook rows stay bounded in the DOM and all rows remain selectable and reachable',async()=>{
+  i18n.setLanguage('en')
+  const book={sourceFile:'large.xlsx',sheets:[{id:'s0',name:'Sheet1',headerRows:1,merges:[],columns:[{id:'s0-c0'},{id:'s0-c1'}],
+    rows:[{id:'header',cells:['Sequence','Material'],formulas:{},types:{}},...Array.from({length:8400},(_,i)=>({id:'row-'+i,cells:[i+1,'material-'+i],formulas:{},types:{}}))]}]}
+  const Parts=component('PartsWorkbook.vue','book,loading,shown,matches,rowPage,rowPageCount,changeRowPage,toggleAllRows,selectedRows,dirty')
+  const View={...Parts,setup(props,ctx){return Parts.setup(props,{...ctx,expose(s){
+    s.book.value=book;s.loading.value=false
+    assert.equal(s.shown.value.length,100);assert.equal(s.matches.value.length,8400);assert.equal(s.rowPageCount.value,84)
+    s.toggleAllRows();assert.equal(s.selectedRows.value.length,8400)
+    s.changeRowPage(84);assert.equal(s.shown.value[0].row.id,'row-8300');assert.equal(s.shown.value.at(-1).row.id,'row-8399')
+    assert.equal(s.dirty.value,false);assert.equal(book.sheets[0].rows.length,8401)
+  }})}}
+  const html=await renderToString(Vue.createSSRApp(View))
+  assert.equal((html.match(/data-row-id=/g)||[]).length,100)
+  assert.match(html,/material-8399/);assert.match(html,/8301–8400/)
+})
+
+test('large real-data overview and exception navigation use indexed order access during initial setup',async()=>{
+  i18n.setLanguage('en')
+  let idReads=0
+  const orders=Array.from({length:8400},(_,i)=>({...reconciliation.workspaceOrders()[0],get id(){idReads++;return 'large-'+i},po:'PO-'+i,imported:true,importCompletion:'NG',qty:5,reported:0,sourceReported:0,sourceRemaining:5}))
+  const checks=orders.map(o=>({id:'CHECK-'+o.id,order:o.id,kind:'delivery',rule:true,title:'Follow up dispatch',status:'待处理'}))
+  const html=await renderToString(Vue.createSSRApp(component('Operations.vue'),{view:'overview',orders,issues:checks,shipments:[],role:'buyer'}))
+  assert.match(html,/Overview/)
+  assert.ok(idReads<8400*25,'order lookups must not scan all orders for every case: '+idReads)
+  idReads=0
+  const app=await render({orders,shipments:[],issues:[],checks})
+  assert.match(app.html,/Tasks/)
+  assert.ok(idReads<8400*50,'sidebar and visible-issue lookups must remain linear: '+idReads)
 })

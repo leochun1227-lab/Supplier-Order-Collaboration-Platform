@@ -13,6 +13,7 @@ import { isException, KINDS, label, workbookIdentity, isHistoricalOrder, reporte
 const props=defineProps({view:String,orders:Array,shipments:Array,issues:Array,role:String,selection:Object,synced:Boolean})
 const emit=defineEmits(['open-order','review','dispatch','sync','inspect','navigate','reset','clear-selection','shipment'])
 const l=(zh,en)=>tr(label(zh,en))
+const orderById=computed(()=>new Map([...props.issues.filter(c=>c.sourceRecord).map(c=>[c.order,c.sourceRecord]),...props.orders.map(o=>[o.id,o])]))
 const query=ref(''),owner=ref(''),source=ref(''),purpose=ref(''),shipping=ref(''),status=ref('all'),kind=ref(''),caseStatus=ref('active'),supplier=ref('')
 watch(()=>props.view,()=>{query.value='';kind.value='';caseStatus.value='active'})
 watch(()=>props.role,()=>{owner.value='';supplier.value=''})
@@ -137,7 +138,7 @@ const ageSeries=computed(()=>[
 const ageChart=computed(()=>age.value.map(a=>({...a,segments:ageSeries.value.map(s=>({...s,count:a.rows.filter(o=>(['生产订单','售后配件'].includes(o.type)?o.type:'用途待确认')===s.key).length}))})))
 const ageMax=computed(()=>Math.max(1,...age.value.map(a=>a.rows.length)))
 function ageDescription(a){return `${a.label} ${l('天','days')} · ${a.segments.map(s=>`${s.title} ${s.count}`).join(' / ')} · ${tr('合计')} ${a.rows.length} ${tr('行')}`}
-const shipmentRows=computed(()=>props.shipments.filter(s=>allocations(s).some(a=>props.orders.some(o=>o.id===a.order))))
+const shipmentRows=computed(()=>props.shipments.filter(s=>allocations(s).some(a=>orderById.value.has(a.order))))
 const listTotal=computed(()=>props.view==='orders'?rows.value.length:props.view==='shipments'?shipmentRows.value.length:tasks.value.length)
 const maxPage=computed(()=>Math.max(1,Math.ceil(listTotal.value/pageSize.value)))
 watch(maxPage,value=>{pageNumber.value=Math.min(pageNumber.value,value)})
@@ -145,10 +146,11 @@ function goToPage(value){pageNumber.value=Math.max(1,Math.min(maxPage.value,Math
 const pagedRows=computed(()=>rows.value.slice((pageNumber.value-1)*pageSize.value,pageNumber.value*pageSize.value))
 const pagedTasks=computed(()=>tasks.value.slice((pageNumber.value-1)*pageSize.value,pageNumber.value*pageSize.value))
 const pagedShipments=computed(()=>shipmentRows.value.slice((pageNumber.value-1)*pageSize.value,pageNumber.value*pageSize.value))
-function order(id){return props.orders.find(o=>o.id===id)||props.issues.find(c=>c.order===id)?.sourceRecord}
+function order(id){return orderById.value.get(id)}
 function open(id,tab='overview'){const o=props.orders.find(o=>o.id===id);if(o)emit('open-order',o,tab);else{const issue=props.issues.find(c=>c.order===id);if(issue)emit('review',issue)}}
 function inspect(records,title){emit('inspect',{ids:[...new Set(records.map(o=>o.id))],label:title})}
-function relatedCases(o){return active.value.filter(i=>i.order===o.id)}
+const casesByOrder=computed(()=>{const groups=new Map();for(const c of active.value){if(!groups.has(c.order))groups.set(c.order,[]);groups.get(c.order).push(c)}return groups})
+function relatedCases(o){return casesByOrder.value.get(o.id)||[]}
 function fulfillment(o){if(o.cancelled)return l('已取消','Cancelled');if(o.imported)return remainingQty(o)>0?(reportedQty(o)>0?tr('部分发运'):l('待发运','To dispatch')):l('台账已报发','Ledger: dispatched');return o.received>=o.qty?tr('已收货'):reportedQty(o)>0?reportedQty(o)<o.qty?tr('部分发运'):l('已报发','Reported dispatched'):tr(o.status)}
 function shipmentGroups(s){return groupLabel(allocations(s).filter(a=>order(a.order)).reduce((out,a)=>{const u=order(a.order).unit||'EA';out[u]=(out[u]||0)+a.qty;return out},{}))}
 function exportView(){

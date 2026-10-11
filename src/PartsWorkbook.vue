@@ -210,16 +210,25 @@ const headerCells = computed(() => (sheet.value?.rows.slice(0,sheet.value.header
 onMounted(readColumnPreferences)
 const values = computed(() => sheet.value ? sheetValues(sheet.value) : [])
 const matches = computed(() => sheet.value ? filteredRows(sheet.value, values.value, search.value, filters.value, sort.value) : [])
-const shown = matches
+const rowPage=ref(1), rowsPerPage=100
+const rowPageCount=computed(()=>Math.max(1,Math.ceil(matches.value.length/rowsPerPage)))
+const shown=computed(()=>matches.value.slice((rowPage.value-1)*rowsPerPage,rowPage.value*rowsPerPage))
+watch(rowPageCount,count=>{rowPage.value=Math.min(rowPage.value,count)})
+function changeRowPage(value){
+  if(!commit())return
+  rowPage.value=Math.max(1,Math.min(rowPageCount.value,Math.trunc(Number(value)||1)))
+  if(tableScroll.value)tableScroll.value.scrollTop=0
+}
+
 const filterCount = computed(() => Object.values(filters.value).filter(Boolean).length)
 const selectedRowSet = computed(() => new Set(selectedRows.value))
-const allSelected = computed(() => shown.value.length > 0 && shown.value.every(({ row }) => selectedRowSet.value.has(row.id)))
+const allSelected = computed(() => matches.value.length > 0 && matches.value.every(({ row }) => selectedRowSet.value.has(row.id)))
 const activeRow = computed(() => sheet.value?.rows.find(r => r.id === active.value?.rowId))
 const activeIndex = computed(() => sheet.value?.rows.findIndex(r => r.id === active.value?.rowId) ?? -1)
 const formula = computed(() => activeRow.value?.formulas[active.value?.col] || '')
 const displayActive = computed(() => activeIndex.value >= 0 ? values.value[activeIndex.value][active.value.col] : '')
 const status = computed(() => loading.value ? tx('正在加载…', 'Loading…') : error.value ? tx('尚未保存', 'Not saved') : saving.value ? tx('正在保存到 Firebase…', 'Saving to Firebase…') : dirty.value ? tx('有待保存的修改', 'Unsaved changes') : tx('已保存到 Firebase', 'Saved to Firebase'))
-watch([search, filters, sort], () => { selectedRows.value = []; if (tableScroll.value) tableScroll.value.scrollTop = 0 }, { deep: true })
+watch([search, filters, sort, sheetId], () => { rowPage.value=1; selectedRows.value = []; if (tableScroll.value) tableScroll.value.scrollTop = 0 }, { deep: true })
 const filterOptions = computed(() => {
   if (!filterOpen.value || !sheet.value) return []
   const counts = new Map()
@@ -361,12 +370,14 @@ function paste(event, row, col) {
   mutate(s => lines.forEach((line, r) => line.forEach((value, c) => setCell(s, visibleRows[start + r].row.id, visibleColumns.value[startColumn+c].c, value))))
 }
 function toggleRow(id) { selectedRows.value = selectedRows.value.includes(id) ? selectedRows.value.filter(x => x !== id) : [...selectedRows.value, id] }
-function toggleAllRows() { const ids = shown.value.map(({row}) => row.id); selectedRows.value = allSelected.value ? [] : ids }
+function toggleAllRows() { const ids = matches.value.map(({row}) => row.id); selectedRows.value = allSelected.value ? [] : ids }
 async function addRow() {
   if (!commit()) return
   let id
   if (!mutate(s => { id = insertRow(s, activeIndex.value >= s.headerRows ? activeIndex.value + 1 : s.rows.length) })) return
   clearFilters(); sort.value = null; active.value = {rowId:id,col:visibleColumns.value[0].c}
+  await nextTick()
+  rowPage.value=Math.floor(matches.value.findIndex(item=>item.row.id===id)/rowsPerPage)+1
   await nextTick()
   const cell = tableScroll.value?.querySelector('[data-row-id="'+id+'"] [data-cell]')
   cell?.scrollIntoView({block:'center',inline:'nearest'}); cell?.focus({preventScroll:true})
@@ -438,7 +449,8 @@ onUnmounted(() => { stopped = true; importRequest++; clearTimeout(importTimeout)
           <tbody><tr v-for="{row,index} in shown" :key="row.id" v-memo="[visibleColumns,row,index,values[index],rowSize(row),active?.rowId===row.id?active.col:null,editing?.rowId===row.id?editing.col:null,editing?.rowId===row.id?draft:null,selectedRowSet.has(row.id),language,book.sapRefreshRun]" :data-row-id="row.id" :style="rowStyle(row)" :class="{'pw-sized-row':!!rowSize(row),'pw-row-selected':selectedRowSet.has(row.id)}"><th class="pw-row-number"><label><span>{{index+1}}</span><input type="checkbox" :checked="selectedRowSet.has(row.id)" :aria-label="tx('选择第 ','Select row ')+(index+1)" @change="toggleRow(row.id)"/></label><span class="pw-resize-row" role="separator" tabindex="0" aria-orientation="horizontal" :aria-label="tx('调整行高 ','Resize row ')+(index+1)" :aria-valuemin="24" :aria-valuemax="546" :aria-valuenow="rowSize(row)||34" :title="tx('拖动调整行高；双击恢复默认','Drag to resize row; double-click to reset')" @pointerdown.stop.prevent="startResize($event,'row',row.id)" @pointermove.stop="moveResize" @pointerup.stop="finishResize" @pointercancel="cancelResize" @lostpointercapture="cancelResize" @click.stop @dblclick.stop.prevent="resetDimension('row',row.id)" @keydown.stop="sizeKey($event,'row',row.id,rowSize(row)||34)"/></th><td v-for="{col,c} in visibleColumns" :key="col.id" tabindex="0" data-cell :data-column="c" :style="{'--pw-cell-fill':cellFill(sheet,row,c)}" :class="{'has-fill':!!cellFill(sheet,row,c),focused:active?.rowId===row.id&&active?.col===c,'pw-new-cell':isNewRow(row)&&c===sequenceColumn,numeric:typeof values[index][c]==='number',formula:!!row.formulas[c]}" @click="selectCell(row,c)" @dblclick="startEdit(row,c)" @keydown="keyCell($event,row,c)" @paste="paste($event,row,c)" @copy="!editing && ($event.clipboardData.setData('text/plain',String(values[index][c]??'')),$event.preventDefault())"><b v-if="isNewRow(row)&&c===sequenceColumn" class="pw-new-badge" :title="tx('本次 SAP 刷新新增','Added in this SAP refresh')">NEW</b><select v-if="editing?.rowId===row.id&&editing?.col===c&&c===completionColumn" ref="editor" v-model="draft" :aria-label="tx('评价','Completion status')" @change="commit" @blur="commit" @keydown.esc.prevent="editing=null"><option value="">—</option><option value="NG">{{tx('NG · 正在进行','NG · In progress')}}</option><option value="OK">{{tx('OK · 完成','OK · Completed')}}</option><option value="澳洲取消订单">{{tx('澳洲取消订单','AU cancelled order')}}</option></select><textarea v-else-if="editing?.rowId===row.id&&editing?.col===c" ref="editor" v-model="draft" :aria-label="columnName(c)+(index+1)" @blur="commit" @keydown.enter.exact.prevent="commit" @keydown.esc.prevent="editing=null"/><span v-else :title="String(values[index][c]??'')">{{c===completionColumn?completionText(values[index][c]):values[index][c]}}</span></td></tr></tbody>
         </table><div v-if="!shown.length" class="pw-empty">{{tx('没有符合筛选条件的行。','No rows match these filters.')}}<button @click="clearFilters">{{tx('清除筛选','Clear filters')}}</button></div>
       </div>
-      <footer class="pw-footer" :title="tx('拖动列头／行号边界调整尺寸 · 双击边界恢复 · 双击格子编辑','Drag header edges to resize · Double-click edges to reset · Double-click cells to edit')"><div class="pw-sheet-tabs" role="tablist" :aria-label="tx('工作表','Worksheets')"><button v-for="s in book.sheets" :key="s.id" role="tab" :aria-selected="sheetId===s.id" :class="{active:sheetId===s.id}" @click="switchSheet(s.id)"><Table2 :size="15"/>{{s.name}}<small>{{s.rows.length}} × {{s.columns.length}}</small></button></div><div class="pw-footer-meta"><span>{{tx('原文件','Original')}}: {{sheet.originalRows}} {{tx('行','rows')}} × {{sheet.originalColumns}} {{tx('列','columns')}} · {{tx('当前','Current')}}: {{sheet.rows.length}} × {{sheet.columns.length}} {{tx('（含标题行）','(including headers)')}}</span></div><div class="pw-row-count" role="status">{{tx('显示','Showing')}} {{matches.length}} / {{sheet.rows.length-sheet.headerRows}} {{tx('数据行 · 连续滚动','data rows · Continuous scrolling')}}</div></footer>
+      <footer class="pw-footer" :title="tx('拖动列头／行号边界调整尺寸 · 双击边界恢复 · 双击格子编辑','Drag header edges to resize · Double-click edges to reset · Double-click cells to edit')"><div class="pw-sheet-tabs" role="tablist" :aria-label="tx('工作表','Worksheets')"><button v-for="s in book.sheets" :key="s.id" role="tab" :aria-selected="sheetId===s.id" :class="{active:sheetId===s.id}" @click="switchSheet(s.id)"><Table2 :size="15"/>{{s.name}}<small>{{s.rows.length}} × {{s.columns.length}}</small></button></div><div class="pw-footer-meta"><span>{{tx('原文件','Original')}}: {{sheet.originalRows}} {{tx('行','rows')}} × {{sheet.originalColumns}} {{tx('列','columns')}} · {{tx('当前','Current')}}: {{sheet.rows.length}} × {{sheet.columns.length}} {{tx('（含标题行）','(including headers)')}}</span></div><div class="pw-row-count" role="status">{{tx('显示','Showing')}} {{matches.length?(rowPage-1)*rowsPerPage+1:0}}–{{Math.min(rowPage*rowsPerPage,matches.length)}} / {{matches.length}} {{tx('条筛选结果','matching rows')}}</div></footer>
+      <div v-if="rowPageCount>1" class="pw-pagination" :aria-label="tx('总表分页','Workbook pages')"><span>{{tx('每页 100 行，搜索、全选与导出仍涵盖全部数据','100 rows per page. Search, select all and export cover all data.')}}</span><button :disabled="rowPage<=1" @click="changeRowPage(rowPage-1)">{{tx('上一页','Previous')}}</button><label>{{tx('页码','Page')}} <input type="number" min="1" :max="rowPageCount" :value="rowPage" :aria-label="tx('总表页码','Workbook page number')" @change="changeRowPage($event.target.value);$event.target.value=rowPage"/> / {{rowPageCount}}</label><button :disabled="rowPage>=rowPageCount" @click="changeRowPage(rowPage+1)">{{tx('下一页','Next')}}</button></div>
 
     </template>
     <Dialog :model-value="importOpen" @update:model-value="closeImport" :disable-outside-click-to-close="importParsing||importSaving" :options="{title:importRestore?tx('恢复替换前版本','Restore previous version'):tx('导入 Excel · 完整替换总表','Import Excel · Replace workbook'),size:'2xl'}">
@@ -489,6 +501,8 @@ onUnmounted(() => { stopped = true; importRequest++; clearTimeout(importTimeout)
 </template>
 
 <style scoped>
+.pw-pagination{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-shrink:0;padding:8px 4px;font-size:12px;color:#395364}.pw-pagination>span{margin-right:auto}.pw-pagination button,.pw-pagination input{border:1px solid #cbdde3;border-radius:4px;padding:4px 8px;background:white}.pw-pagination input{width:64px}
+
 .pw-grid .pw-new-cell>span{padding-top:19px}.pw-new-badge{position:absolute;top:2px;left:3px;font-size:9px;line-height:12px;padding:0 3px;border-radius:3px;color:#fff;background:#167d65;pointer-events:none}.pw-grid td>select{width:100%;min-height:36px;border:1px solid #277c88;background:white;font-size:12px}
 
 .pw-import-panel{display:grid;gap:14px;font-size:14px;color:#395364}.pw-import-panel fieldset{border:0;padding:0;min-width:0}.pw-import-panel label{display:flex;gap:12px;align-items:center}.pw-import-panel select,.pw-import-panel input{border:1px solid #cbdde3;border-radius:5px;padding:6px;max-width:100%}.pw-import-panel input{width:78px}.pw-import-warning{background:#fff7e6;border:1px solid #ead7af;border-radius:6px;padding:12px;line-height:1.7}.pw-import-summary,.pw-import-sample{overflow:auto;max-height:220px;margin-top:12px}.pw-import-panel table{border-collapse:collapse;font-size:12px;width:100%}.pw-import-panel th,.pw-import-panel td{border:1px solid #d6e0e7;padding:8px;text-align:left}.pw-import-panel th{background:#edf4f5;white-space:nowrap}.pw-import-sample td{min-width:100px;max-width:240px;overflow-wrap:anywhere}.pw-import-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}

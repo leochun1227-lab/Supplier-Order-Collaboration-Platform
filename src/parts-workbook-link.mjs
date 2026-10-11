@@ -57,7 +57,7 @@ export function workbookProjection(source, book) {
     byRow.set(rowId,order); hidden.add(order.id)
   }
   const columns = new Map(sheet.columns.map((col,c)=>[col.id,c]))
-  const linked = [], linkedShipments = new Map()
+  const linked = [], linkedShipments = new Map(), originalShipments = new Map(original.shipments.map(s=>[s.id,s]))
   for (let r=sheet.headerRows;r<sheet.rows.length;r++) {
     const row = sheet.rows[r], old = byRow.get(row.id), f = {}, differences = new Set()
     for (let c=0;c<FIELDS.length;c++) {
@@ -108,7 +108,7 @@ export function workbookProjection(source, book) {
     if(row.sapOrigin)order.importEvidence=[{file:'SAP Australia',sheet:'PO'}]
     if(differences.size)order.cooperationSource={zh:'表格维护／平台联动',en:'Workbook / shared workspace'}
     linked.push(order)
-    const shipmentId=`IMP-${order.id}`, existing=original.shipments.find(s=>s.id===shipmentId)
+    const shipmentId=`IMP-${order.id}`, existing=originalShipments.get(shipmentId)
     if(existing||order.sourceReported>0&&!order.cancelled) {
       const candidate=dispatch(order,f)
       const shipmentFields={mode:['mode'],containerNo:['container'],waybillNo:['awb'],ref:['container','awb'],chassis:['loaded_van'],position:['location'],reportedAt:['actual_ship'],etd:['actual_ship'],qty:['shipped'],allocations:['shipped'],deletedAt:['shipped','completion']}
