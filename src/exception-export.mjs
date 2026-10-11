@@ -39,7 +39,7 @@ const ns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 export function buildExceptionExport(tasks,orders,options={}) {
   const rows=exceptionExportRows(tasks,orders,options)
   if(rows.length>1048576)throw new Error('export_excel_limit')
-  const name=options.language==='en'?'Exception comparison':'异常对比清单'
+  const name=options.view==='todos'?(options.language==='en'?'Tasks':'待办清单'):(options.language==='en'?'Exception comparison':'异常对比清单')
   const last=`${columnName(columns.length-1)}${rows.length}`
   const sheetRows=rows.map((row,r)=>{
     const lines=Math.max(...row.map((value,c)=>String(value??'').split('\n').reduce((n,line)=>n+Math.max(1,Math.ceil(Array.from(line).reduce((width,char)=>width+(char.charCodeAt(0)>255?2:1),0)/columns[c][2])),0)))
@@ -63,7 +63,8 @@ export function downloadExceptions(tasks,orders,options={}) {
   const url=URL.createObjectURL(new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}))
   const link=document.createElement('a')
   try {
-    link.href=url;link.download=`Regent-${options.language==='en'?'Exceptions':'异常对比清单'}-${exportedAt.slice(0,10)}.xlsx`
+    const title=options.view==='todos'?(options.language==='en'?'Tasks':'待办清单'):(options.language==='en'?'Exceptions':'异常对比清单')
+    link.href=url;link.download=`Regent-${title}-${exportedAt.slice(0,10)}.xlsx`
     document.body.appendChild(link);link.click()
   } finally {link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 }

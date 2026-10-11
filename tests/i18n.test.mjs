@@ -36,7 +36,7 @@ function component(file, expose=''){
     './persistence.mjs':persistence,'./firebase-store.mjs':{cloudConfigured:false,connectCloud:(...args)=>cloudFactory(...args)},
     './runtime-config.mjs':{publicTestEnabled:false},'./public-firebase-store.mjs':{connectPublicWorkspace:async()=>{throw new Error('No public Firebase calls in SSR tests')}},
     'frappe-ui':{Button:wrapper,Badge:wrapper,Dialog:dialog},'lucide-vue-next':new Proxy({},{get:()=>icon})}
-  for(const name of ['Operations.vue','RecordFacts.vue','ReviewDialog.vue','DispatchDialog.vue','ShipmentEditor.vue','CloudPanel.vue','PartsWorkbook.vue'])if(source.includes("'./"+name+"'"))imports['./'+name]={default:component(name)}
+  for(const name of ['Operations.vue','TrendChart.vue','RecordFacts.vue','ReviewDialog.vue','DispatchDialog.vue','ShipmentEditor.vue','CloudPanel.vue','PartsWorkbook.vue'])if(source.includes("'./"+name+"'"))imports['./'+name]={default:component(name)}
   const edits=parseJS(code,{sourceType:'module'}).program.body.filter(n=>n.type==='ImportDeclaration').map(n=>({start:n.start,end:n.end,
     text:n.specifiers.map(s=>`const ${s.local.name}=imports[${JSON.stringify(n.source.value)}][${JSON.stringify(s.type==='ImportDefaultSpecifier'?'default':s.imported.name)}];`).join('\n')}))
   for(const edit of edits.reverse())code=code.slice(0,edit.start)+edit.text+code.slice(edit.end)
@@ -44,11 +44,37 @@ function component(file, expose=''){
 }
 const exposed='page, role, selected, detailOpen, detailTab, modal, modalOpen, notice, error, activeIssue, activeShipment, batches, response, reason, issueStatus, comment, submitResponse, submitEta, approve, saveIssue, orders, shipments, issues, checks, reviewOpen, reviewCase, dispatchOpen, performReview, performDispatch, syncDemo, saveCollaborationDates, startShipment, saveShipment, loginCloud, cloudBusy, cloudError, cloudRevision, cloudConnected, removeShipment, restoreShipment'
 const App=component('App.vue',exposed)
-test('the default landing page is the parts workbook',async()=>{
+test('trend charts preserve measured zero and break lines at missing periods',async()=>{
+  const html=await renderToString(Vue.createSSRApp(component('TrendChart.vue'),{
+    title:'Freight trend',labels:['Apr','May','Jun','Jul'],totals:[20,null,0,10],
+    series:[{name:'Air',color:'#f18a43',values:[20,null,0,10]}],
+    missingLabel:'Unverified',emptyLabel:'No recorded data',
+  }))
+  const path=html.match(/<path[^>]+d="([^"]*)"/)[1]
+  assert.equal((path.match(/M /g)||[]).length,2,'missing May starts a new segment in June')
+  assert.equal((path.match(/L /g)||[]).length,1,'only June to July is connected')
+  assert.equal((html.match(/class="trend-point"/g)||[]).length,3,'the measured zero is a real point')
+  assert.match(html,/Jun · Air: 0/)
+  assert.match(html,/May · Air: Unverified/)
+  assert.doesNotMatch(html,/class="trend-empty"/)
+})
+
+test('all-missing trend data has an empty state without a fabricated zero line',async()=>{
+  const html=await renderToString(Vue.createSSRApp(component('TrendChart.vue'),{
+    title:'Arrivals',labels:['Week 1','Week 2'],totals:[null,null],
+    series:[{name:'Sea',color:'#1e40af',values:[null,null]}],
+    missingLabel:'Unverified',emptyLabel:'No verified arrivals',
+  }))
+  assert.match(html,/No verified arrivals/)
+  assert.doesNotMatch(html,/class="trend-point"/)
+  assert.doesNotMatch(html,/[ML] \d/)
+})
+
+test('the default landing page is the overview dashboard',async()=>{
   i18n.setLanguage('zh')
   const result=await render()
-  assert.equal(result.state.page.value,'parts')
-  assert.match(result.html,/备品备件总表/)
+  assert.equal(result.state.page.value,'overview')
+  assert.match(result.html,/总览看板/)
 })
 test('parts grid renders every source row in one scrolling table with column filters visible by default',async()=>{
   const source=JSON.parse(fs.readFileSync(new URL('../public/parts-workbook.json',import.meta.url),'utf8'))
@@ -215,7 +241,7 @@ test('exception scopes keep completed and cancelled history accessible and expor
   let downloaded;exceptionDownload=(...args)=>downloaded=args
   const Ops=component('Operations.vue','caseScope,caseScopeTabs,tasks,exportExceptionView')
   const View={...Ops,setup(props,ctx){return Ops.setup(props,{...ctx,expose(s){
-    assert.deepEqual(s.tasks.value.map(c=>c.order),['current'])
+    assert.deepEqual(s.tasks.value.map(c=>c.order),['current','completed','cancelled'])
     assert.deepEqual(s.caseScopeTabs.value.map(t=>t.count),[1,2,3])
     s.caseScope.value='history';assert.deepEqual(s.tasks.value.map(c=>c.order),['completed','cancelled'])
     s.exportExceptionView();assert.deepEqual(downloaded[0].map(c=>c.order),['completed','cancelled'])
@@ -296,7 +322,7 @@ function assertEnglish(text){text=text.replaceAll('2026 Parts order list发澳�
 
 test('all seven pages render in English, including role-specific views',async()=>{
   i18n.setLanguage('en')
-  for(const page of ['overview','orders','delivery','shipments','exceptions','reports','data']){
+  for(const page of ['overview','orders','delivery','shipments','exceptions','todos','reports','data']){
     for(const role of page==='data'?['buyer']:['buyer','supplier'])assertEnglish((await render({page,role})).text)
   }
 })
@@ -575,4 +601,54 @@ test('Excel replacement dialog keeps old data on failure, requires conflict revi
     assert.equal(state.importOpen.value,false);assert.equal(state.dirty.value,false);assert.deepEqual(state.undo.value,[])
     assert.match(state.importNotice.value,/latest.xlsx/)
   } finally {workbookStoreFactory=factory}
+})
+
+
+test('parts NEW badge sits in the sequence cell and completion editor retains all three business states',async()=>{
+  i18n.setLanguage('zh')
+  const book=JSON.parse(fs.readFileSync(new URL('../public/parts-workbook.json',import.meta.url),'utf8'))
+  book.sapRefreshRun='refresh2';book.sheets[0].rows=book.sheets[0].rows.slice(0,4)
+  const row=book.sheets[0].rows[3];row.sapNewRun='refresh2';row.cells[25]='NG'
+  const Parts=component('PartsWorkbook.vue','book,loading,editing,draft')
+  const renderGrid=edit=>renderToString(Vue.createSSRApp({...Parts,setup(props,ctx){return Parts.setup(props,{...ctx,expose(s){
+    s.book.value=book;s.loading.value=false
+    if(edit){s.editing.value={rowId:row.id,col:25};s.draft.value='NG'}
+  }})}}))
+  const html=await renderGrid(false)
+  assert.match(html,/<td[^>]*data-column="0"[^>]*>[\s\S]*?class="pw-new-badge"/)
+  assert.match(html,/NEW/);assert.match(html,/NG · 正在进行/)
+  const editor=await renderGrid(true)
+  assert.match(editor,/<option value="NG"[^>]*>NG · 正在进行/)
+  assert.match(editor,/<option value="OK"[^>]*>OK · 完成/)
+  assert.match(editor,/<option value="澳洲取消订单"/)
+  book.sapRefreshRun='refresh3'
+  assert.doesNotMatch(await renderGrid(false),/class="pw-new-badge"/)
+})
+
+test('navigation places exceptions and tasks between parts and orders; task page excludes data discrepancies',async()=>{
+  i18n.setLanguage('zh')
+  const app=await render(),nav=app.html.match(/<nav[^>]*>[\s\S]*?<\/nav>/)[0]
+  const positions=['备品备件表格','异常','待办','订单工作台'].map(text=>nav.indexOf(text))
+  assert.ok(positions.every((value,i)=>value>=0&&(!i||value>positions[i-1])))
+  const base=reconciliation.workspaceOrders()[0]
+  const orders=[{...base,id:'open',imported:true,importCompletion:'NG'},{...base,id:'done',imported:true,importCompletion:'OK'}]
+  const issues=[{id:'po',kind:'po',order:'open',status:'待处理',title:'PO mismatch'},
+    {id:'delivery',kind:'delivery',order:'open',status:'待处理',title:'Dispatch follow-up'},
+    {id:'old',kind:'delivery',order:'done',status:'待处理',title:'Completed follow-up'}]
+  const Ops=component('Operations.vue','tasks,caseScope')
+  const View={...Ops,setup(props,ctx){return Ops.setup(props,{...ctx,expose(s){
+    assert.equal(s.caseScope.value,'current');assert.deepEqual(s.tasks.value.map(c=>c.id),['delivery'])
+    s.caseScope.value='all';assert.deepEqual(s.tasks.value.map(c=>c.id),['delivery','old'])
+  }})}}
+  const html=await renderToString(Vue.createSSRApp(View,{view:'todos',orders,issues,shipments:[],role:'buyer'}))
+  assert.match(html,/导出待办 Excel/);assert.doesNotMatch(html,/PO mismatch/)
+})
+
+
+test('the separate task page can paginate beyond its first forty tasks',async()=>{
+  i18n.setLanguage('en')
+  const order=reconciliation.workspaceOrders()[0]
+  const issues=Array.from({length:41},(_,i)=>({id:'todo-'+i,kind:'delivery',order:order.id,status:'待处理',title:'Follow-up '+i}))
+  const html=await renderToString(Vue.createSSRApp(component('Operations.vue'),{view:'todos',orders:[order],issues,shipments:[],role:'buyer'}))
+  assert.match(html,/class="ops-pagination"/);assert.match(html,/41 records · 1 \/ 2/);assert.match(html,/Next/)
 })

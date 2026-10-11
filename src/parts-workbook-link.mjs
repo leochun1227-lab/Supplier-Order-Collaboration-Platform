@@ -100,8 +100,12 @@ export function workbookProjection(source, book) {
     baseline.orders[order.id]=candidates; changed.orders[order.id]=flags
     for (const [key,value] of Object.entries(candidates)) if(isNew||flags[key])order[key]=value
     order.workbookRowId=row.id; order.workbookRow=r+1; order.workbookExtras=extras
+    if(row.sapAnchor){order.sapAnchor=cloneBook(row.sapAnchor);order.sapLineConvention=row.sapLineConvention||'sap'}
+    order.sapOrigin=!!row.sapOrigin
+    order.isNew=!!row.sapNewRun&&row.sapNewRun===book.sapRefreshRun
     order.importFields=f
     if(isNew||replacement) order.importEvidence=[{file:book.sourceFile,sheet:sheet.name,row:r+1}]
+    if(row.sapOrigin)order.importEvidence=[{file:'SAP Australia',sheet:'PO'}]
     if(differences.size)order.cooperationSource={zh:'表格维护／平台联动',en:'Workbook / shared workspace'}
     linked.push(order)
     const shipmentId=`IMP-${order.id}`, existing=original.shipments.find(s=>s.id===shipmentId)

@@ -6,9 +6,10 @@ import { t as tr, dateLabel, language } from './i18n.mjs'
 import { normalizedIdentity, sapLineMatches } from './sap-reference.mjs'
 import { downloadExceptions } from './exception-export.mjs'
 import { managerOverview } from './manager-overview.mjs'
+import TrendChart from './TrendChart.vue'
 import { TODAY, openQty } from './domain.mjs'
 import { money, percent } from './analytics.mjs'
-import { KINDS, label, workbookIdentity, isHistoricalOrder, reportedQty, remainingQty, groupLabel, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
+import { isException, KINDS, label, workbookIdentity, isHistoricalOrder, reportedQty, remainingQty, groupLabel, allocations, relatedShipments, priceReady,delayDays,shipmentDelayed } from './reconciliation.mjs'
 const props=defineProps({view:String,orders:Array,shipments:Array,issues:Array,role:String,selection:Object,synced:Boolean})
 const emit=defineEmits(['open-order','review','dispatch','sync','inspect','navigate','reset','clear-selection','shipment'])
 const l=(zh,en)=>tr(label(zh,en))
@@ -16,10 +17,12 @@ const query=ref(''),owner=ref(''),source=ref(''),purpose=ref(''),shipping=ref(''
 watch(()=>props.view,()=>{query.value='';kind.value='';caseStatus.value='active'})
 watch(()=>props.role,()=>{owner.value='';supplier.value=''})
 const imported=computed(()=>props.orders.some(o=>o.imported))
-const pageNumber=ref(1),pageSize=ref(40),caseScope=ref('current')
+const pageNumber=ref(1),pageSize=ref(40),caseScope=ref(props.view==='todos'?'current':'all')
+watch(()=>props.view,value=>{caseScope.value=value==='todos'?'current':'all'})
+function belongsToView(c){return props.view==='exceptions'?isException(c):props.view==='todos'?!isException(c):c.rule||c.sourceRecord}
 function scopeCase(c,scope=caseScope.value){const historical=isHistoricalOrder(order(c.order));return scope==='all'||(scope==='history'?historical:!historical)}
-const scopedCases=computed(()=>props.issues.filter(c=>(props.view!=='data'||c.rule||c.sourceRecord)&&scopeCase(c)))
-const caseScopeTabs=computed(()=>[['current',l('当前待办','Current tasks')],['history',l('历史记录','Historical records')],['all',l('全部记录','All records')]].map(([key,title])=>({key,title,count:props.issues.filter(c=>(props.view!=='data'||c.rule||c.sourceRecord)&&c.status!=='已解决'&&scopeCase(c,key)).length})))
+const scopedCases=computed(()=>props.issues.filter(c=>belongsToView(c)&&scopeCase(c)))
+const caseScopeTabs=computed(()=>[['current',l('当前待办','Current tasks')],['history',l('历史记录','Historical records')],['all',l('全部记录','All records')]].map(([key,title])=>({key,title,count:props.issues.filter(c=>belongsToView(c)&&c.status!=='已解决'&&scopeCase(c,key)).length})))
 const sapReferenceDate=computed(()=>[...new Set(props.orders.map(o=>o.sapAsOf).filter(Boolean))].sort().at(-1)||'—')
 function clearOrderFilters(){query.value='';owner.value='';source.value='';purpose.value='';shipping.value='';supplier.value='';pageNumber.value=1}
 function selectStatus(value){clearOrderFilters();status.value=value;emit('clear-selection')}
@@ -36,7 +39,7 @@ function taskSearch(c) {
   const o=order(c.order)||{}, current=workbookIdentity(o)
   return [c.id,tr(c.title),tr(c.detail),current.po,current.item,o.sapPo,o.sapItem,o.part,o.sapPart].join(' ').toLowerCase()
 }
-const baseTasks=computed(()=>scopedCases.value.filter(c=>(props.view!=='data'||c.rule||c.sourceRecord)&&(!kind.value||c.kind===kind.value)&&(!owner.value||c.owner===owner.value)&&(caseStatus.value==='all'||caseStatus.value==='active'&&c.status!=='已解决'||caseStatus.value==='closed'&&c.status==='已解决')&&taskSearch(c).includes(query.value.toLowerCase())))
+const baseTasks=computed(()=>scopedCases.value.filter(c=>belongsToView(c)&&(!kind.value||c.kind===kind.value)&&(!owner.value||c.owner===owner.value)&&(caseStatus.value==='all'||caseStatus.value==='active'&&c.status!=='已解决'||caseStatus.value==='closed'&&c.status==='已解决')&&taskSearch(c).includes(query.value.toLowerCase())))
 const caseFilters=ref({}), caseFilterKey=ref(''), caseFilterDraft=ref({query:'',values:null})
 const caseFilterPanel=ref(null),caseFilterInput=ref(null),caseFilterStyle=ref({})
 let caseFilterAnchor=null
@@ -118,9 +121,12 @@ const costMetrics=computed(()=>{
     {label:l('空运费占比','Air share of freight'),value:formatRate(f.airShare)},
   ]
 })
-const arrivalMax=computed(()=>Math.max(1,...management.value.arrivalWeeks.map(w=>w.count??0)))
-const freightMax=computed(()=>Math.max(1,...management.value.freight.months.map(m=>m.airFreight??0)))
 const arrivalColors=['#1e40af','#f97316','#7793a7']
+const arrivalSeries=computed(()=>[l('海运','Sea'),l('空运','Air'),l('其他','Other')].map((name,index)=>({
+  name,color:arrivalColors[index],dash:[undefined,'6 3','2 3'][index],
+  values:management.value.arrivalWeeks.map(week=>week.count===null?null:week.modes[index].count),
+})))
+const freightSeries=computed(()=>[{name:l('空运费','Air freight'),color:'#f18a43',values:management.value.freight.months.map(month=>month.airFreight)}])
 const arrivalRange=w=>w.start.slice(5).replace('-','/')+'–'+w.end.slice(5).replace('-','/')
 const age=computed(()=>[[0,15],[16,30],[31,60],[61,90],[91,Infinity]].map(([min,max])=>({label:max===Infinity?'>90':`${min}–${max}`,rows:management.value.open.filter(o=>{const d=(Date.parse(TODAY)-Date.parse(o.created))/86400000;return d>=min&&d<=max})})))
 const ageSeries=computed(()=>[
@@ -156,10 +162,10 @@ function exportExceptionView(){
   exceptionExportError.value='';exceptionExportNotice.value=''
   if (!tasks.value.length) return
   try {
-    downloadExceptions(tasks.value,props.orders,{language:language.value})
-    exceptionExportNotice.value=l('已导出当前筛选的 '+tasks.value.length+' 条异常（含全部页）。','Exported all '+tasks.value.length+' matching issues across all pages.')
+    downloadExceptions(tasks.value,props.orders,{language:language.value,view:props.view})
+    exceptionExportNotice.value=props.view==='todos'?l('已导出当前筛选的 '+tasks.value.length+' 条待办（含全部页）。','Exported all '+tasks.value.length+' matching tasks across all pages.'):l('已导出当前筛选的 '+tasks.value.length+' 条异常（含全部页）。','Exported all '+tasks.value.length+' matching issues across all pages.')
   } catch {
-    exceptionExportError.value=l('异常清单导出失败，请重试。','Could not export the exception list. Please retry.')
+    exceptionExportError.value=props.view==='todos'?l('待办清单导出失败，请重试。','Could not export the task list. Please retry.'):l('异常清单导出失败，请重试。','Could not export the exception list. Please retry.')
   }
 }
 </script>
@@ -235,28 +241,17 @@ function exportExceptionView(){
     <div class="manager-bottom-grid manager-planning-grid">
       <section class="ops-panel manager-arrivals-panel">
         <header><h2>{{l('未来四周预计到仓','Expected arrivals · next 4 weeks')}}</h2><small>{{l('已核实批次','Verified batches')}}</small></header>
-        <div class="manager-week-chart">
-          <button v-for="week in management.arrivalWeeks" :key="week.start" class="manager-week-column" :disabled="week.count===null||week.count===0" :aria-label="arrivalRange(week)+' · '+(week.count===null?l('待核实','Unverified'):week.count+' '+l('批','batches'))" @click="inspect(week.rows,l('预计到仓','Expected arrivals')+' '+arrivalRange(week))">
-            <strong>{{week.count===null?'—':week.count}}</strong>
-            <span class="manager-week-track" :class="{'is-unknown':week.count===null}" aria-hidden="true"><span v-for="(mode,index) in week.modes" :key="mode.mode" :style="{height:(mode.count/arrivalMax*100)+'%',background:arrivalColors[index]}"></span></span>
-            <small>{{arrivalRange(week)}}</small>
-          </button>
-        </div>
+        <TrendChart :title="l('未来四周预计到仓趋势','Expected arrivals over the next 4 weeks')" :labels="management.arrivalWeeks.map(arrivalRange)" :series="arrivalSeries" :totals="management.arrivalWeeks.map(week=>week.count)" :selectable="management.arrivalWeeks.map(week=>week.count>0)" :format-value="value=>value+' '+l('批','batches')" :missing-label="l('待核实','Unverified')" :empty-label="l('暂无已核实到仓数据','No verified arrival data')" @select="index=>inspect(management.arrivalWeeks[index].rows,l('预计到仓','Expected arrivals')+' '+arrivalRange(management.arrivalWeeks[index]))"/>
         <div class="manager-planning-legend"><span v-for="(mode,index) in [l('海运','Sea'),l('空运','Air'),l('其他','Other')]" :key="mode"><i :style="{background:arrivalColors[index]}"></i>{{mode}}</span><small v-if="!management.arrivalsKnown">{{l('ETA 待核实','ETA unverified')}}</small><small v-else-if="management.missingEta.length">{{l('ETA 待补','Missing ETA')}} {{management.missingEta.length}} {{l('批','batches')}}</small></div>
       </section>
       <section class="ops-panel manager-cost-panel">
         <header><h2>{{l('空运成本与货值','Air freight cost & value')}} <span v-if="management.freight.ytd.airFreight===null||management.freight.ytd.airValue===null||management.freight.ytd.totalFreight===null" class="manager-data-badge">{{l('待补充','Incomplete')}}</span></h2><small>{{TODAY.slice(0,4)}} {{l('已登记 · AUD','Recorded · AUD')}}</small></header>
         <div class="manager-cost-grid"><div v-for="metric in costMetrics" :key="metric.label"><small>{{metric.label}}</small><strong>{{metric.value}}</strong></div></div>
         <div class="manager-freight-trend-heading"><b>{{l('空运费月度变化','Monthly air freight')}}</b><small>{{l('最近6个完整月','Last 6 complete months')}} · AUD</small></div>
-        <div class="manager-freight-chart">
-          <div v-for="month in management.freight.months" :key="month.month" class="manager-month-column" :title="month.month+' · '+l('空运费','Air freight')+' '+formatAmount(month.airFreight)+' · '+l('运费占比','Freight share')+' '+formatRate(month.airShare)">
-            <strong>{{formatAmount(month.airFreight)}}</strong><span class="manager-month-track" :class="{'is-unknown':month.airFreight===null}"><i :style="{height:((month.airFreight??0)/freightMax*100)+'%'}"></i></span><small>{{month.month}}</small>
-          </div>
-        </div>
+        <TrendChart :title="l('空运费月度变化 · AUD','Monthly air freight · AUD')" :labels="management.freight.months.map(month=>month.month)" :series="freightSeries" :totals="management.freight.months.map(month=>month.airFreight)" :format-value="formatAmount" :missing-label="l('待补充','Incomplete')" :empty-label="l('暂无已登记运费数据','No recorded freight data')"/>
         <div class="manager-cost-changes"><span>{{management.freight.months.at(-1).month}} {{l('较上月','vs previous month')}}</span><span>{{l('空运费','Air freight')}} <b>{{formatChange(management.freight.monthChange)}}</b></span><span>{{l('运费占比','Freight share')}} <b>{{formatChange(management.freight.shareChange,' '+l('个百分点','pp'))}}</b></span></div>
       </section>
     </div>
-    <details class="ops-definitions manager-definitions"><summary>{{l('统计说明','Definitions')}}</summary><p>{{l('报发待核实包括缺少 SAP 发货依据、报发量超出过账量或存在未过账批次的订单行。总订单包含取消行，PO 为去重订单数。已发货按业务报发统计，含部分发货；已收货按已核实收货统计，含部分收货。结构图占比以筛选后的未完成订单行为分母。— 表示待核实或待接入，并非零。','Dispatch to verify includes missing SAP dispatch evidence, reports exceeding PGI or unposted batches. Total lines include cancellations; PO counts are unique. Dispatched counts use reported dispatch, including partial dispatch; received counts use verified receipts, including partial receipts. Mix percentages use filtered open lines. — means unverified or unavailable, not zero.')}}</p><p>{{l('当前快照按所选供应商与用途统计。未完成订单采用台账剩余待发口径（演示数据采用未收货口径）；状态可能重叠，订单行与批次不可相加。明确延期依据已过发运承诺、到仓日期偏差或已登记延期；仅缺少日期不算延期。图表账龄从订单创建日计算，不等于逾期天数。','Current snapshot uses the selected supplier and purpose. Imported open orders use remaining ledger dispatch; demo orders use outstanding receipts. States may overlap; lines and batches are not additive. Delays require overdue dispatch commitments, arrival-date variance or recorded delays; missing dates alone are not delays. Ageing runs from creation, not from the due date.')}}</p><p>{{l('在途仅计已关联 SAP 过账和物流节点的实际批次，累计报发与删除记录不计入。未来7天包括今天，仅展示已核实且有 ETA 的批次；缺少依据显示 —。未来四周从今天起按连续七天分组，以批次计数，不混加不同单位的数量。','Transit requires actual batches with SAP PGI and logistics milestones; aggregate and deleted records are excluded. The next 7 days includes today and only verified batches with an ETA; unavailable evidence is shown as —. The next four weeks use consecutive seven-day windows starting today. Counts use batches, not sums of incompatible quantity units.')}}</p><p>{{l('费用仅统计所选范围内已登记的实际批次，按 SAP 过账日（无则发运日或报发日）归属期间。年度指标截至今天；趋势使用最近六个完整月份，环比比较最近两个完整月份。运费须明确为 AUD，空运货值按已确认 AUD 单价及价格单位计算。缺日期、缺费用币种或跨筛选范围且未拆分费用的批次不视为零；未登记月份和上月为零时不计算百分比环比。','Costs use recorded actual batches in scope, dated by SAP PGI, then dispatch or reported date. Annual figures run through today; trends use six complete months and changes compare the latest two. Freight requires explicit AUD currency; air cargo value uses confirmed AUD prices and price units. Missing dates, currencies or unallocated costs on shared batches are not zero. Unrecorded months and zero prior-month costs have no percentage change.')}}</p></details>
   </template>
 
   <template v-else-if="view==='orders'">
@@ -269,12 +264,13 @@ function exportExceptionView(){
     <details class="ops-definitions"><summary>{{l('数量与状态说明','Quantity & status definitions')}}</summary><p>{{l('报发不等于 SAP 过账；待发按业务报发量计算。价格、收货和分批记录可在订单详情查看。','Reported dispatch is separate from SAP PGI. Remaining dispatch uses reported quantities. Open details for prices, receipts and batch allocations.')}}</p></details>
   </template>
 
-  <template v-else-if="view==='data'||view==='exceptions'">
+  <template v-else-if="view==='data'||view==='exceptions'||view==='todos'">
+    <p v-if="view==='exceptions'" class="ops-note">{{l('重点核对双方 PO、物料号等差异；OK 和澳洲取消订单仍参与核对与导出。','Review PO, material and other discrepancies, including OK and AU-cancelled orders.')}}</p><p v-if="view==='todos'" class="ops-note">{{l('跟进交期、物流和确认事项；数据差异请查看异常。','Follow up dates, logistics and confirmations. See Exceptions for data discrepancies.')}}</p>
     <div v-if="imported" class="ops-reference"><span>{{l('SAP 参考日期','SAP reference date')}} · {{sapReferenceDate}}</span><details class="ops-definitions"><summary>{{l('核对说明','Reconciliation notes')}}</summary><p>{{l('按已加载的 SAP PO 核对；唯一的 PO、料号、数量匹配可识别顺序行号。历史记录可单独查看。','Checks use loaded SAP POs; a unique PO, material and quantity match can identify sequential line numbers. Historical records are available separately.')}}</p></details><span v-if="orders.some(o=>o.sapReferenceRefreshError)" class="ops-amber">{{l('SAP 核对更新未完成，暂保留上次参考数据。','SAP comparison update incomplete; retaining previous reference data.')}}</span></div>
     <div class="ops-tabs ops-exception-scopes" :aria-label="l('异常记录范围','Exception record scope')"><button v-for="tab in caseScopeTabs" :key="tab.key" :class="{active:caseScope===tab.key}" :aria-pressed="caseScope===tab.key" @click="caseScope=tab.key">{{tab.title}} <b>{{tab.count}}</b></button></div>
     <div v-if="view==='data'&&!imported" class="ops-sync"><div><b>{{l('SAP 与平台核对','SAP / platform reconciliation')}}</b><small>{{l('模拟 SAP 快照','Simulated SAP snapshot')}} · {{synced?'09/08 10:00':'09/08 09:00'}} · {{l('初始化来源截至','Initial source as of')}} 09/04</small></div><Button variant="outline" :disabled="synced" @click="emit('sync')"><RefreshCw :size="15"/>{{l(synced?'示例快照已应用':'模拟接收后续 SAP 快照',synced?'Demo snapshot applied':'Simulate later SAP snapshot')}}</Button></div>
     <div class="ops-check-metrics ops-check-counts"><div><small>{{l('未关闭事项','Open tasks')}}</small><strong>{{scopedCases.filter(i=>i.status!=='已解决').length}}</strong></div><div><small>{{l('涉及订单行 · 去重','Affected lines · unique')}}</small><strong>{{new Set(scopedCases.filter(i=>i.status!=='已解决').map(c=>c.order)).size}}</strong></div><div><small>{{l('已通过核对／已解决','Passed / resolved')}}</small><strong>{{scopedCases.filter(i=>i.status==='已解决').length}}</strong></div></div>
-    <div class="ops-filters ops-filter-panel"><label class="ops-search"><Search :size="16"/><input v-model="query" :placeholder="l('搜索任务、双方 PO 或料号','Search task, either PO or material')"/></label><select v-model="kind" :aria-label="l('问题类型','Issue type')"><option value="">{{l('全部问题类型','All issue types')}}</option><option v-for="(title,key) in KINDS" :key="key" :value="key">{{tr(title)}}</option></select><select v-model="owner" :aria-label="l('任务责任人','Task owner')"><option value="">{{l('全部责任人','All owners')}}</option><option v-for="b in [...new Set(issues.map(i=>i.owner))]" :key="b">{{b}}</option></select><select v-model="caseStatus" :aria-label="l('任务状态','Task status')"><option value="active">{{l('未关闭','Open')}}</option><option value="closed">{{l('已解决','Resolved')}}</option><option value="all">{{l('全部状态','All states')}}</option></select><Button variant="outline" :disabled="!tasks.length" @click="exportExceptionView" :title="l('导出当前筛选的全部异常，不受分页影响','Export all matching issues across every page')"><Download :size="15"/>{{l('导出异常 Excel','Export exceptions to Excel')}}</Button><small>{{tasks.length}} {{l('条异常','issues')}}</small></div>
+    <div class="ops-filters ops-filter-panel"><label class="ops-search"><Search :size="16"/><input v-model="query" :placeholder="l('搜索任务、双方 PO 或料号','Search task, either PO or material')"/></label><select v-model="kind" :aria-label="l('问题类型','Issue type')"><option value="">{{l('全部问题类型','All issue types')}}</option><option v-for="(title,key) in KINDS" :key="key" :value="key">{{tr(title)}}</option></select><select v-model="owner" :aria-label="l('任务责任人','Task owner')"><option value="">{{l('全部责任人','All owners')}}</option><option v-for="b in [...new Set(issues.map(i=>i.owner))]" :key="b">{{b}}</option></select><select v-model="caseStatus" :aria-label="l('任务状态','Task status')"><option value="active">{{l('未关闭','Open')}}</option><option value="closed">{{l('已解决','Resolved')}}</option><option value="all">{{l('全部状态','All states')}}</option></select><Button variant="outline" :disabled="!tasks.length" @click="exportExceptionView" :title="l('导出当前筛选的全部异常，不受分页影响','Export all matching issues across every page')"><Download :size="15"/>{{view==='todos'?l('导出待办 Excel','Export tasks to Excel'):l('导出异常 Excel','Export exceptions to Excel')}}</Button><small>{{tasks.length}} {{view==='todos'?l('条待办','tasks'):l('条异常','issues')}}</small></div>
     <p v-if="exceptionExportNotice" class="ops-note" role="status">{{exceptionExportNotice}}</p><p v-if="exceptionExportError" class="ops-error" role="alert">{{exceptionExportError}}</p>
     <div v-if="Object.keys(caseFilters).length" class="ops-case-filter-summary"><span>{{l('已筛选','Filtered columns')}}: {{Object.keys(caseFilters).map(key=>caseColumns.find(c=>c[0]===key)?.[1]).join(' · ')}}</span><button @click="resetCaseFilters">{{l('清除表头筛选','Clear column filters')}}</button></div>
     <section class="ops-panel ops-scroll"><table class="ops-case-table">
@@ -302,6 +298,6 @@ function exportExceptionView(){
     <div class="ops-toolbar"><small>{{shipmentRows.length}} {{imported?l('条报发记录／累计汇总；不能视为逐批明细','dispatch records / cumulative summaries; not individual shipment history'):l('批次 · 一个批次可关联多条订单','batches · each can include multiple order lines')}}</small><Button variant="solid" class="primary" @click="emit('dispatch')"><Plus :size="15"/>{{l('登记业务报发','Record dispatch')}}</Button></div>
     <section v-for="s in pagedShipments" :key="s.id" class="ops-panel ops-batch"><header><h2>{{s.id}} <small>{{tr(s.mode)}} · {{s.ref}}</small></h2><div class="ops-filters"><Badge :theme="s.sapPosted?'green':'orange'">{{l(s.sapPosted?'SAP 过账已关联':'业务报发 · 待核实',s.sapPosted?'SAP PGI linked':'Reported · unverified')}}</Badge><Button variant="outline" @click="emit('shipment',s)">{{l('维护物流与延期','Edit logistics & delay')}}</Button></div></header><div class="ops-batch-facts"><div><small>{{l('报发日期','Reported date')}}</small><b>{{s.reportedAt||s.etd}}</b></div><div><small>{{l('SAP 过账日期','SAP PGI date')}}</small><b>{{s.pgiAt||'—'}}</b></div><div><small>{{l('澳洲到仓 ETA','AU warehouse ETA')}}</small><b>{{s.eta||l('待补充','Not provided')}}</b><small v-if="shipmentDelayed(s)" class="ops-amber">{{l('延期跟进','Delay follow-up')}} {{delayDays(s)>0?'+'+delayDays(s)+'d':''}}</small></div><div><small>{{l('车架／装载位置','Chassis / load position')}}</small><b>{{s.chassis||'—'}} / {{tr(s.position)||'—'}}</b></div></div><div class="ops-tracking-strip"><span>{{l('集装箱','Container')}} <b>{{s.containerNo||'—'}}</b></span><span>{{l('提单／空运单','B/L / AWB')}} <b>{{s.waybillNo||'—'}}</b></span><span>{{l('快递号','Courier')}} <b>{{s.courierNo||'—'}}</b></span><span>{{l('承运商','Carrier')}} <b>{{tr(s.carrier)||'—'}}</b></span></div><p v-if="s.delayReason||s.nextAction" class="ops-note">{{l('延期原因／下一步','Delay reason / next action')}}: {{s.delayReason||'—'}} / {{s.nextAction||'—'}}</p><table><thead><tr><th>{{l('关联 PO／行','Linked PO / line')}}</th><th>{{l('物料','Material')}}</th><th>{{l('分配数量','Allocated quantity')}}</th><th>{{l('已关联收货','Allocated receipts')}}</th></tr></thead><tbody><tr v-for="a in allocations(s).filter(a=>order(a.order))" :key="a.order"><td><button class="ops-link" @click="open(a.order,'logistics')">{{order(a.order).po}} / {{order(a.order).item}}</button></td><td>{{order(a.order).part}}</td><td>{{a.qty}} {{order(a.order).unit}}</td><td>{{a.receivedQty??'—'}} {{order(a.order).unit}}</td></tr></tbody></table></section>
   </template>
-<div v-if="['orders','shipments','data','exceptions'].includes(view)&&listTotal>pageSize" class="ops-pagination"><span>{{listTotal}} {{l('条记录','records')}} · {{pageNumber}} / {{maxPage}}</span><Button variant="outline" :disabled="pageNumber<=1" @click="pageNumber--">{{l('上一页','Previous')}}</Button><Button variant="outline" :disabled="pageNumber*pageSize>=listTotal" @click="pageNumber++">{{l('下一页','Next')}}</Button></div>
+<div v-if="['orders','shipments','data','exceptions','todos'].includes(view)&&listTotal>pageSize" class="ops-pagination"><span>{{listTotal}} {{l('条记录','records')}} · {{pageNumber}} / {{maxPage}}</span><Button variant="outline" :disabled="pageNumber<=1" @click="pageNumber--">{{l('上一页','Previous')}}</Button><Button variant="outline" :disabled="pageNumber*pageSize>=listTotal" @click="pageNumber++">{{l('下一页','Next')}}</Button></div>
 </div>
 </template>

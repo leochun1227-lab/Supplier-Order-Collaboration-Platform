@@ -2,7 +2,8 @@ import { TODAY, seedOrders, seedShipments, daysLate, openQty } from './domain.mj
 import { identityValue, normalizedIdentity, workbookIdentity, sapLineMatches } from './sap-reference.mjs'
 export { workbookIdentity } from './sap-reference.mjs'
 export const label=(zh,en)=>({zh,en})
-export const isHistoricalOrder=o=>!!o?.imported&&(!!o.cancelled||o.qtyKnown!==false&&openQty(o)<=0)
+export const isHistoricalOrder=o=>!!o?.imported&&(!!o.cancelled||String(o.importCompletion).toUpperCase()==='OK'||o.qtyKnown!==false&&openQty(o)<=0)
+export const isException=c=>['po','po_line','po_line_missing','sap_reference','shared_reference','source_link','unit','initialization','shipment','material','quantity'].includes(c.kind)
 export const KINDS={
   po:label('SAP 与总表 PO 不一致','SAP / workbook PO mismatch'),
   po_line:label('SAP 与总表订单行不一致','SAP / workbook line mismatch'),
@@ -100,11 +101,11 @@ export function detectChecks(orders,shipments,today=TODAY){
         if(reasons[o.sapReferenceReason])found.at(-1).detail=label(`${reasons[o.sapReferenceReason].zh}；Excel PO: ${business.po||'—'} / 行: ${business.item||'—'}`,`${reasons[o.sapReferenceReason].en}; Excel PO: ${business.po||'—'} / line: ${business.item||'—'}`)
         found.at(-1).fingerprint=JSON.stringify(['sap_reference',found.at(-1).detail])
       }
-      if((o.workbookMaterialChanged||o.sapPart&&o.sapPart!==o.soPart)&&!mappingReady(o))add(o,'material',`${o.sapPart||'—'} / ${o.unit} ↔ ${o.soPart||'—'} / ${o.soUnit}`)
+      if(o.sapPart&&o.sapPart!==o.soPart||(o.workbookMaterialChanged&&!mappingReady(o)))add(o,'material',`${o.sapPart||'—'} / ${o.unit} ↔ ${o.soPart||'—'} / ${o.soUnit}`,'高')
       if(o.sapSharedLineCount>1)add(o,'shared_reference',label(`${o.sapSharedLineCount} 条总表记录关联 SAP ${o.sapPo} / ${o.sapItem}；可能是拆分发运，不自动汇总订购数量。`,`${o.sapSharedLineCount} workbook records link to SAP ${o.sapPo} / ${o.sapItem}; may be split dispatches. Ordered quantities are not automatically summed.`))
       if(o.sapUnit&&o.unit&&o.unit!=='?'&&o.sapUnit!==o.unit)add(o,'unit',`SAP: ${o.sapUnit} ↔ Excel: ${o.unit}`)
       if(o.sapSharedLineCount===1&&o.qtyKnown!==false&&Number.isFinite(o.sapQuantity)&&Number.isFinite(o.qty)&&o.sapUnit&&o.sapUnit===o.unit&&o.unit!=='?'&&o.sapPart===o.soPart&&o.sapQuantity!==o.qty)add(o,'quantity',`SAP: ${o.sapQuantity} ${o.sapUnit} ↔ Excel: ${o.qty} ${o.unit}`)
-      if(openQty(o)<=0)continue
+      if(isHistoricalOrder(o))continue
       // These facts now have live rules; stale import warnings must not remain
       // open after the workbook is corrected or its material mapping is confirmed.
       const initialChecks=o.importChecks?.filter(c=>!['sap_link','material','price'].includes(c.kind))||[]

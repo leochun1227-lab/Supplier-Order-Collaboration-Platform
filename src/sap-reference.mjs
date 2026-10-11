@@ -73,6 +73,7 @@ export async function refreshSapSnapshot(data,{databaseURL,fetcher=fetch,previou
   applySapSnapshotReferences(next,rows,pointer.finishedAt)
   await saveAnchors?.(next)
   data.orders=next.orders
+  data.sapRows=rows
   data.sapSnapshotFinishedAt=pointer.finishedAt
   return pointer.run
 }

@@ -217,7 +217,6 @@ html[lang="en"] .ops-chart-row{grid-template-columns:104px minmax(0,1fr) 54px}
 .manager-supplier-focus{display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;text-align:left;padding:10px 13px;font-size:11px;color:#748795}
 .manager-supplier-focus b{font-size:12px;color:#31566b;overflow-wrap:anywhere}
 .manager-supplier-focus>svg{margin-left:auto;flex-shrink:0}
-.manager-definitions{padding:5px 0}
 @media(max-width:1200px){
   .manager-main-grid{grid-template-columns:1fr 1fr}
   .manager-cost-grid{grid-template-columns:1fr 1fr;gap:18px 12px}
@@ -295,15 +294,6 @@ html[lang="en"] .ops-chart-row{grid-template-columns:104px minmax(0,1fr) 54px}
 @media(max-width:750px){.manager-support-grid{grid-template-columns:1fr}.manager-support-grid>.manager-supplier-panel{grid-column:auto}}
 
 .manager-planning-grid{grid-template-columns:minmax(340px,.85fr) minmax(480px,1.4fr)}
-.manager-week-chart{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;padding:20px 18px 12px}
-.manager-week-column{display:flex;flex-direction:column;align-items:center;gap:9px;min-width:0;padding:0;background:transparent}
-.manager-week-column:disabled{cursor:default}
-.manager-week-column:not(:disabled):hover{background:#f4f8fb}
-.manager-week-column>strong{font-size:21px;font-variant-numeric:tabular-nums}
-.manager-week-column>small{font-size:11px;white-space:nowrap}
-.manager-week-track{display:flex;flex-direction:column-reverse;width:60%;max-width:54px;height:150px;border-bottom:1px solid #dce6ec}
-.manager-week-track>span{display:block;flex-shrink:0;width:100%}
-.manager-week-track.is-unknown,.manager-month-track.is-unknown{border:1px dashed #dce6ec;background:#fafcfd;border-radius:3px}
 .manager-planning-legend{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:0 18px 15px;font-size:11px;color:#748795}
 .manager-planning-legend>span{display:flex;align-items:center;gap:5px}
 .manager-planning-legend i{width:8px;height:8px;border-radius:2px}
@@ -313,18 +303,12 @@ html[lang="en"] .ops-chart-row{grid-template-columns:104px minmax(0,1fr) 54px}
 .manager-planning-grid .manager-cost-grid strong{font-size:21px;color:#31566b;margin-bottom:0;overflow-wrap:anywhere}
 .manager-freight-trend-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px 0;border-top:1px solid #edf2f5;font-size:12px}
 .manager-freight-trend-heading>small{font-size:11px}
-.manager-freight-chart{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;padding:12px 14px 10px}
-.manager-month-column{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0}
-.manager-month-column>strong{font-size:11px;font-weight:500;color:#31566b;font-variant-numeric:tabular-nums}
-.manager-month-column>small{font-size:10px;white-space:nowrap}
-.manager-month-track{display:flex;align-items:flex-end;width:65%;max-width:38px;height:67px;border-bottom:1px solid #dce6ec}
-.manager-month-track i{display:block;width:100%;background:#f18a43;border-radius:2px 2px 0 0}
 .manager-cost-changes{display:flex;flex-wrap:wrap;gap:6px 16px;padding:8px 14px 11px;border-top:1px solid #edf2f5;font-size:11px;color:#748795}
 .manager-cost-changes b{color:#31566b;font-weight:550;margin-left:4px}
-@media(max-width:1150px){.manager-planning-grid{grid-template-columns:1fr}.manager-week-track{height:115px}}
-@media(max-width:600px){.manager-week-chart{gap:6px;padding:15px 10px 10px}.manager-week-column>small{font-size:10px}.manager-freight-chart{gap:5px;padding-inline:10px}.manager-planning-grid .manager-cost-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:1150px){.manager-planning-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.manager-planning-grid .manager-cost-grid{grid-template-columns:1fr 1fr}}
 
-/* Keep the overview on one desktop screen by reducing whitespace, not clipping data. */
+/* Keep the header compact and distribute the remaining desktop height across charts. */
 .overview-layout .topbar{height:42px;min-height:42px;padding-block:3px}
 .overview-layout .language-switch{padding:1px}
 .overview-layout .language-switch>button{min-height:26px;padding:2px 8px}
@@ -336,13 +320,17 @@ html[lang="en"] .ops-chart-row{grid-template-columns:104px minmax(0,1fr) 54px}
 .manager-toolbar .ops-filters>button{min-height:30px;height:30px}
 
 @media(min-width:1100px){
-  .overview-main{--overview-gap:8px;--overview-chart-height:clamp(32px,calc(20dvh - 112px),130px)}
-  .ops-kpis.manager-kpis{grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--overview-gap);margin-bottom:var(--overview-gap);overflow:visible}
+  .overview-layout main.overview-main{--overview-gap:8px;height:calc(100dvh - 42px)}
+  .overview-main>.ops{height:100%;display:grid;grid-template-rows:auto auto minmax(min-content,1.1fr) minmax(min-content,1fr);gap:var(--overview-gap)}
+  .overview-main .manager-toolbar{margin-bottom:0}
+  .ops-kpis.manager-kpis{grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--overview-gap);margin-bottom:0;overflow:visible}
   .ops-kpis.manager-kpis>button{min-height:74px;padding:5px 10px 19px}
   .ops-kpis.manager-kpis strong{font-size:26px;margin:3px 0 0}
   .manager-kpi-meta,.manager-kpi-basis{right:10px;bottom:5px;font-size:11px}
-  .manager-structure-scroll{margin-bottom:var(--overview-gap)}
-  .manager-structure-group{grid-template-columns:minmax(225px,1.15fr) minmax(130px,.6fr) minmax(340px,1.55fr) minmax(160px,.7fr);min-width:0}
+  .manager-structure-scroll{margin-bottom:0}
+  .manager-structure-group{grid-template-columns:minmax(225px,1.15fr) minmax(130px,.6fr) minmax(340px,1.55fr) minmax(160px,.7fr);min-width:0;height:100%}
+  .manager-structure-group>section,.manager-planning-grid>section{display:flex;flex-direction:column}
+  .manager-structure-group>section>header,.manager-planning-grid>section>header{flex-shrink:0}
   .overview-main .ops-panel>header,.manager-structure-group>section>header{min-height:34px;padding:6px 10px;gap:6px}
   .overview-main .ops-panel>header h2{font-size:14px}
   .overview-main .ops-panel>header small{font-size:11px}
@@ -352,18 +340,18 @@ html[lang="en"] .ops-chart-row{grid-template-columns:104px minmax(0,1fr) 54px}
   .manager-structure-flow .manager-flow-metrics{margin:0 10px 10px}
   .manager-structure-flow .manager-flow-metrics button{padding:7px 2px}
   .manager-flow-metrics strong{font-size:23px;margin-top:2px}
-  .manager-purpose-cards{gap:6px;padding:0 8px 8px}
-  .manager-purpose-card{min-height:67px;padding:6px;gap:4px}
+  .manager-purpose-cards{flex:1;grid-auto-rows:1fr;gap:6px;padding:0 8px 8px}
+  .manager-purpose-card{min-height:67px;padding:6px;gap:4px;justify-content:center}
   .manager-purpose-card>span{gap:8px}
   .manager-purpose-card>span>svg{width:22px;height:22px}
   .manager-purpose-card strong{font-size:23px}
   .manager-purpose-card small{font-size:12px}
   .manager-age-highlight{padding:4px 10px}
   .manager-age-heading{padding:5px 0 3px}
-  .manager-structure-age .ops-age-row{min-height:25px}
+  .manager-structure-age .ops-age-row{min-height:25px;flex:1}
   .manager-structure-age .ops-age-track{height:19px}
   .manager-age-totals{padding-top:5px;margin-top:3px}
-  .manager-structure-age .ops-age-chart{padding:2px 10px 8px}
+  .manager-structure-age .ops-age-chart{padding:2px 10px 8px;display:flex;flex-direction:column;flex:1}
   html[lang="en"] .manager-age-detail .ops-age-row,
   html[lang="en"] .manager-age-heading,
   html[lang="en"] .manager-age-totals{grid-template-columns:48px minmax(24px,1fr) repeat(3,60px) 30px;gap:5px}
@@ -372,23 +360,15 @@ html[lang="en"] .ops-chart-row{grid-template-columns:104px minmax(0,1fr) 54px}
   .manager-transport-stat>b{margin-bottom:1px}
   .manager-transport-stat strong{font-size:21px}
   .manager-transport-stat svg{width:21px;height:21px}
-  .manager-transport-pie{width:82px;height:82px;margin:3px auto 6px}
+  .manager-transport-pie{width:clamp(82px,12dvh,150px);height:clamp(82px,12dvh,150px);flex-shrink:0;margin:auto;}
   .manager-transport-legend{gap:4px 10px;padding:0 8px 6px}
-  .manager-planning-grid{grid-template-columns:minmax(300px,.85fr) minmax(440px,1.4fr);gap:var(--overview-gap);margin-bottom:4px}
-  .manager-week-chart{gap:10px;padding:9px 12px 7px}
-  .manager-week-column{gap:5px}
-  .manager-week-column>strong{font-size:19px}
-  .manager-week-track{height:calc(var(--overview-chart-height) + 42px)}
+  .manager-planning-grid{grid-template-columns:minmax(300px,.85fr) minmax(440px,1.4fr);gap:var(--overview-gap);margin-bottom:0}
   .manager-planning-legend{padding:0 12px 8px;gap:8px}
   .manager-planning-grid .manager-cost-grid{padding:8px 10px 6px}
   .manager-planning-grid .manager-cost-grid small{margin-bottom:3px}
   .manager-planning-grid .manager-cost-grid strong{font-size:20px}
   .manager-freight-trend-heading{padding:5px 10px 0}
-  .manager-freight-chart{gap:8px;padding:5px 10px 6px}
-  .manager-month-column{gap:3px}
-  .manager-month-track{height:var(--overview-chart-height)}
   .manager-cost-changes{padding:5px 10px 6px;gap:4px 12px}
-  .manager-definitions{padding:2px 0}
 }
 
 @media(max-width:650px){
