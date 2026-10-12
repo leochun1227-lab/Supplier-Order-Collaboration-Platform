@@ -1,11 +1,13 @@
 import { pathToFileURL } from 'node:url'
 import { connectPublicWorkspace, PUBLIC_DATABASE } from '../src/public-firebase-store.mjs'
 import { createPartsWorkbookStore } from '../src/parts-workbook-store.mjs'
+import { syncPurchasingGroupMapping } from './sync-purchasing-groups.mjs'
 
 // This process talks only to Firebase. SAP extraction runs separately in Python.
 // Reuse the web application's append-only merge and conditional workbook saves.
-export async function syncWorkbookFromSap({fetcher=fetch,databaseURL=PUBLIC_DATABASE,workspace='excel-20260904',connect=connectPublicWorkspace}={}) {
+export async function syncWorkbookFromSap({fetcher=fetch,databaseURL=PUBLIC_DATABASE,workspace='excel-20260904',connect=connectPublicWorkspace,prepareMapping=syncPurchasingGroupMapping}={}) {
   if(!/^[a-z0-9-]+$/.test(workspace))throw new Error('invalid_workspace')
+  await prepareMapping({databaseURL,fetcher})
   const store=createPartsWorkbookStore({fetcher,databaseURL,path:`supplierCollaboration/workspaces/${workspace}/partsWorkbook`})
   for(let attempt=0;attempt<3;attempt++) {
     let cloud,packet
@@ -21,7 +23,9 @@ export async function syncWorkbookFromSap({fetcher=fetch,databaseURL=PUBLIC_DATA
       const pointer=await response.json()
       if(!pointer?.run||saved.book?.sapRefreshRun!==pointer.run)throw new Error('save_conflict')
       const result={status:'complete',checkedAt:Date.now(),workspace,sapRun:pointer.run,workbookRevision:saved.revision,
-        records:packet.summary.masterRecords,completion:packet.summary.masterCompletion}
+        records:packet.summary.masterRecords,completion:packet.summary.masterCompletion,
+        purposeCounts:packet.state.orders.reduce((counts,o)=>{counts[o.type||'用途待确认']=(counts[o.type||'用途待确认']||0)+1;return counts},{}),
+        purposeRule:packet.summary.purposeClassification?.rule||null}
       const published=await fetcher(`${databaseURL}/supplierCollaboration/sync/workbookLastCheck.json`,{
         method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(result),signal:AbortSignal.timeout(45000)})
       if(!published.ok)throw new Error('workbook_check_publish_failed')
@@ -35,7 +39,7 @@ export async function syncWorkbookFromSap({fetcher=fetch,databaseURL=PUBLIC_DATA
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) {
   try { console.log(JSON.stringify(await syncWorkbookFromSap())) }
   catch(error) {
-    const allowed=new Set(['invalid_workspace','workbook_not_ready','sap_snapshot_unavailable','save_conflict','workbook_check_publish_failed'])
+    const allowed=new Set(['invalid_workspace','workbook_not_ready','sap_snapshot_unavailable','save_conflict','workbook_check_publish_failed','purchasing_mapping_unavailable','purchasing_mapping_sync_failed'])
     console.error(JSON.stringify({status:'failed',stage:'firebase_workbook',error:allowed.has(error.message)?error.message:'workbook_sync_failed'}))
     process.exitCode=1
   }

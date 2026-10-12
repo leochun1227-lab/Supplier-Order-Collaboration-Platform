@@ -83,6 +83,7 @@ test('public workspace refresh reads new SAP snapshots and keeps last good data 
     assert.equal(options?.method,undefined)
     if(url.endsWith('/source.json'))return Response.json({kind:'excel',schemaVersion:1,generation:'g',dataJson:JSON.stringify(original)})
     if(url.includes('/versions.json?')||url.endsWith('/partsWorkbook.json'))return Response.json(null)
+    if(url.endsWith('/purchasingGroupMapping.json'))return Response.json({schemaVersion:1,mapping:{E01:'Karen A.',E03:'Nishi A.'}})
     if(offline)throw new Error('offline')
     if(url.endsWith('/current.json'))return Response.json({run,finishedAt:1789104255050,counts:{po:1},hash:'hash'})
     if(url.endsWith('/hash.json'))return Response.json('hash')
@@ -254,6 +255,7 @@ test('saved workbook PO and line edits flow through Firebase composition, except
   const savedSource={kind:'excel',schemaVersion:1,generation:'g',importBatch:id,dataJson:JSON.stringify(data)}
   let state
   const cloud=await connectPublicWorkspace(packet=>{state=packet.state},error=>{throw error},{databaseURL:'https://example.test',fetcher:async(url,options)=>{
+    if(url.endsWith('/purchasingGroupMapping.json'))return Response.json({schemaVersion:1,mapping:{E01:'Karen A.',E03:'Nishi A.'}})
     assert.equal(options?.method,undefined,'read-only loading')
     if(url.endsWith('/source.json'))return Response.json(savedSource)
     if(url.includes('/imports/'))return Response.json(JSON.stringify(payload))

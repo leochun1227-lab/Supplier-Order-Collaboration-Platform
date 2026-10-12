@@ -6,6 +6,7 @@ import { createSapAnchorStore } from './sap-anchor-store.mjs'
 import { createPartsWorkbookStore, decodePartsWorkbook } from './parts-workbook-store.mjs'
 import { mergeSapWorkbook } from './sap-workbook-sync.mjs'
 import { sapWorkbookDateScope } from './parts-workbook-scope.mjs'
+import { readPurchasingMapping, applyPurchasingGroupClassification, PURCHASING_PURPOSE_RULE } from './purchasing-groups.mjs'
 export const PUBLIC_DATABASE='https://supplier-collaboration-30ddf-default-rtdb.asia-southeast1.firebasedatabase.app'
 export async function connectPublicWorkspace(onChange,onError,{workspace='excel-20260904',fetcher=fetch,interval=15000,databaseURL=PUBLIC_DATABASE,persistSapLinks=true}={}){
   if(!/^[a-z0-9-]+$/.test(workspace))throw new Error('invalid_workspace')
@@ -16,16 +17,19 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
   const data=JSON.parse(source.dataJson);let revision=-1,latest={},stopped=false,refreshing=null,workbook=null,workbookRevision=0,workbookSavedAt=null
   await loadSapReferences(data,source,{databaseURL,fetcher})
   let sapRun=null,sapRefreshFailed=false
+  let purchasingMapping=null
   const anchorStore=persistSapLinks?createSapAnchorStore({base,generation:source.generation,fetcher}):undefined
   const workbookStore=createPartsWorkbookStore({databaseURL,fetcher,path:`supplierCollaboration/workspaces/${workspace}/partsWorkbook`})
   const compose=()=>{
     const result=sharedWorkbookState(data,latest.stateJson?JSON.parse(latest.stateJson):{},workbook,latest.workbookBaseline)
     if(data.sapRows)applySapSnapshotReferences(result.state,data.sapRows,data.sapSnapshotFinishedAt)
+    if(purchasingMapping)applyPurchasingGroupClassification(result.state,purchasingMapping.mapping)
     for(const order of result.state.orders)order.sapReferenceRefreshError=sapRefreshFailed
     return result
   }
   function deliver(){
     const {state}=compose(), summary={...source.summary}
+    summary.purposeClassification={rule:PURCHASING_PURPOSE_RULE,source:'SAP EKGRP / purchasing_group_mapping',syncedAt:purchasingMapping?.syncedAt||null}
     if(workbook){summary.masterRecords=state.orders.length;summary.masterCompletion={NG:0,OK:0,'澳洲取消订单':0,SAP:0};for(const o of state.orders){const key=o.sapPending?'SAP':o.cancelled?'澳洲取消订单':o.importCompletion||'未评价';summary.masterCompletion[key]=(summary.masterCompletion[key]||0)+1};summary.workbookSheets=workbook.sheets.filter(s=>s.id!==(workbook.mainSheetId||'s0')).map(s=>({name:s.name,values:sheetValues(s)}));summary.workbookRevision=workbookRevision}
     onChange({state,revision,generation:source.generation,savedAt:Math.max(latest.at||0,workbookSavedAt||0)||null,email:'Public test',summary,workbookRevision})
   }
@@ -36,9 +40,10 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
       const response=await fetcher(`${base}/versions.json?shallow=true`,{signal:AbortSignal.timeout(20000)})
       if(!response.ok)throw new Error(`firebase_http_${response.status}`)
       const keys=Object.keys(await response.json()||{}).filter(k=>/^r\d{12}$/.test(k)).sort(),key=keys.at(-1),next=key?Number(key.slice(1)):0
-      const [version,parts]=await Promise.all([next>revision&&key?request(`versions/${key}`).then(r=>r.json()):null,request('partsWorkbook').then(r=>r.json())])
+      const [version,parts,mappingPacket]=await Promise.all([next>revision&&key?request(`versions/${key}`).then(r=>r.json()):null,request('partsWorkbook').then(r=>r.json()),readPurchasingMapping({databaseURL,fetcher})])
       if(stopped)return
       let changed=false
+      if(JSON.stringify(mappingPacket)!==JSON.stringify(purchasingMapping)){purchasingMapping=mappingPacket;changed=true}
       try{const nextRun=await refreshSapSnapshot(data,{databaseURL,fetcher,previousRun:sapRun,anchorStore});if(nextRun!==sapRun){sapRun=nextRun;changed=true}if(sapRefreshFailed)changed=true;sapRefreshFailed=false;for(const o of data.orders)if(o.sapReferenceRefreshError){o.sapReferenceRefreshError=false;changed=true}}catch{sapRefreshFailed=true;for(const o of data.orders)o.sapReferenceRefreshError=true;changed=true}
       if(next>revision){if(key&&version?.revision!==next)throw new Error('invalid_revision');latest=version||{};revision=next;changed=true}
       if(parts&&parts.revision>workbookRevision){if(parts.schemaVersion!==1||typeof parts.bookJson!=='string')throw new Error('invalid_workbook');workbook=decodePartsWorkbook(parts);workbookRevision=parts.revision;workbookSavedAt=parts.savedAt;changed=true}

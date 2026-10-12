@@ -12,6 +12,8 @@ SAP 补充还须符合未收货 PO 口径：排除 `70000` 开头 PO、去空格
 
 原始 PO 参考快照仍完整保留，以便核对 Excel 中已 OK／取消的行及错料号、错 PO；只有 SAP 自动补充行按上述口径显示。后续完成或删除的补充行会隐藏，人工记录留存，重新开放时可恢复显示。查询仍是原客户端 800、公司 3110、工厂 3111、供应商 3060 范围的五类 SELECT；仅在 PO 投影中补充头删除标识，利用已有计划快照计算资格，不扩大到所有供应商。没有采用参考网站固定的 2026-05-07 分界或覆盖人工取消的规则。
 
+生产／售后分类使用 PO 的 SAP 采购组 `EKGRP`，按 `purchaser = mapping[group] || group` 解析：`Karen A.` 为生产订单，`Nishi A.` 为售后配件，其他为用途待确认。映射来自 `https://partssr-default-rtdb.asia-southeast1.firebasedatabase.app/app_admin/purchasing_group_mapping.json`，后台在每次总表同步前读入并条件保存到本项目 `supplierCollaboration/config/purchasingGroupMapping`。网页读取并轮询此副本；SAP 快照不变时也能应用新的映射。Excel 采购员原值和外购／自制类别保留。映射无法读取时，更新报错且不覆盖已有映射。
+
 日常计划使用**目标电脑上的 Windows 任务计划程序**，任务名为 `Regent Supplier SAP to Firebase`，每天电脑当地时间 17:00 执行（悉尼时间请设置 `AUS Eastern Standard Time`）。当前开发电脑上的临时任务已撤销，Codex 定时任务已停用；目标电脑需按下方步骤安装。无需打开 Codex 或网页；目标电脑需开机、保持唤醒、该 Windows 用户已登录（锁屏可以），并可连接公司内网。错过计划时间后会尽快补跑。
 
 成功结果还会记录到 `supplierCollaboration/sync/workbookLastCheck`。本地分别查看 `outputs/firebase-sync/sync.log`（SAP 提取与快照）和 `outputs/firebase-sync/workbook-last-run.log`（总表保存）。总表写入冲突最多重试三次，不重新抓 SAP；更新入口有跨进程锁，避免两次并发提取。

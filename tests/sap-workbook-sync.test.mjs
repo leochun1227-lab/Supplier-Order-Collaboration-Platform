@@ -149,6 +149,7 @@ test('workspace refresh compares the latest workbook with SAP and saves append-o
   const rows=[sap(),sap('4500000002'),sap('4500000003')]
   const pointer={run:'1800000000000-1234567890abcdef1234567890abcdef',finishedAt:1800000000000,hash:'hash',counts:{po:3}}
   const fetcher=async(url,options={})=>{
+    if(url.endsWith('/purchasingGroupMapping.json'))return Response.json({schemaVersion:1,mapping:{E01:'Karen A.',E03:'Nishi A.'}})
     if(url.endsWith('/source.json'))return Response.json({kind:'excel',schemaVersion:1,generation:'g',dataJson:JSON.stringify(source),summary:{}})
     if(url.includes('/versions.json?'))return Response.json(null)
     if(url.endsWith('/partsWorkbook.json')){

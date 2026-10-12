@@ -41,6 +41,7 @@ export function applySapSnapshotReferences(data,rows,finishedAt) {
     o.sapReferenceSource='snapshot';o.sapReferenceRefreshError=false;o.sapAsOf=new Date(finishedAt).toISOString().slice(0,10)
     o.sapPo=text(selected?.EBELN);o.sapItem=text(selected?.EBELP);o.sapPart=text(selected?.MATNR);o.sapUnit=text(selected?.MEINS)
     o.sapQuantity=selected?.MENGE??null
+    o.sapPurchasingGroup=text(selected?.EKGRP)
     o.sapLinkMethod=selected?method:'';o.sapCandidateCount=matching.length
     o.sapLinkBasis={...source,material,qty}
     // Once the source numbering convention has been established for this anchor,

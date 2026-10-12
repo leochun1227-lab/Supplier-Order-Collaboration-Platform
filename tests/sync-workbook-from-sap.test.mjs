@@ -17,7 +17,7 @@ function fixture({snapshotError=false,conflict=false,run='run1'}={}) {
     if(url.endsWith('/sync/workbookLastCheck.json')&&options.method==='PUT')return Response.json(JSON.parse(options.body))
     throw new Error('Unexpected network request')
   }
-  return {connect,fetcher,calls,get closed(){return closed},get connections(){return connections}}
+  return {connect,fetcher,calls,prepareMapping:async()=>{},get closed(){return closed},get connections(){return connections}}
 }
 
 test('headless refresh verifies Firebase readback and records status without accessing SAP or Git',async()=>{
