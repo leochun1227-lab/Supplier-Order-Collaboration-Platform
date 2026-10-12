@@ -5,6 +5,7 @@ import { Dialog } from 'frappe-ui'
 import { language } from './i18n.mjs'
 import { cloneBook, columnName, sheetValues, setCell, insertRow, deleteRows, insertColumn, deleteColumn, filteredRows, externalFormula, cellFill, setCellFill, setDimension, dimensionLimits, partsHeaderMapping, preparePartsReplacement, isSapPending } from './parts-workbook.mjs'
 import { createPartsWorkbookStore } from './parts-workbook-store.mjs'
+import { sapWorkbookDateScope, hiddenSapSupplement } from './parts-workbook-scope.mjs'
 import { createPartsExportWorker, createPartsImportWorker } from './parts-workbook-download.mjs'
 const emit=defineEmits(['saved'])
 
@@ -174,6 +175,7 @@ const completionCounts = computed(() => {
   const counts = {NG:0,OK:0,pending:0}
   if (completionColumn.value < 0) return counts
   for (let i=sheet.value.headerRows;i<sheet.value.rows.length;i++) {
+    if (hiddenSapSupplement(sheet.value.rows[i],dateScope.value)) continue
     if (isSapPending(sheet.value.rows[i])) counts.pending++
     else { const status=String(values.value[i]?.[completionColumn.value]??'').trim().toUpperCase(); if(status in counts)counts[status]++ }
   }
@@ -223,7 +225,9 @@ const headerCells = computed(() => (sheet.value?.rows.slice(0,sheet.value.header
   })))
 onMounted(readColumnPreferences)
 const values = computed(() => sheet.value ? sheetValues(sheet.value) : [])
-const matches = computed(() => sheet.value ? filteredRows(sheet.value, values.value, search.value, filters.value, sort.value) : [])
+const dateScope = computed(() => sapWorkbookDateScope(book.value, sheet.value, values.value))
+const closedSapCount = computed(() => sheet.value?.rows.slice(sheet.value.headerRows).filter(row => row.sapOrigin && row.sapOpenPo?.eligible === false && !dateScope.value.hidden.has(row.id)).length || 0)
+const matches = computed(() => sheet.value ? filteredRows(sheet.value, values.value, search.value, filters.value, sort.value).filter(({row}) => !hiddenSapSupplement(row,dateScope.value)) : [])
 const rowPage=ref(1), rowsPerPage=100
 const rowPageCount=computed(()=>Math.max(1,Math.ceil(matches.value.length/rowsPerPage)))
 const shown=computed(()=>matches.value.slice((rowPage.value-1)*rowsPerPage,rowPage.value*rowsPerPage))
@@ -246,7 +250,9 @@ watch([search, filters, sort, sheetId], () => { rowPage.value=1; selectedRows.va
 const filterOptions = computed(() => {
   if (!filterOpen.value || !sheet.value) return []
   const counts = new Map()
-  for (const cells of values.value.slice(sheet.value.headerRows)) {
+  for (let r=sheet.value.headerRows;r<sheet.value.rows.length;r++) {
+    if (hiddenSapSupplement(sheet.value.rows[r],dateScope.value)) continue
+    const cells=values.value[r]
     const value = String(cells[filterColumn.value] ?? '')
     counts.set(value, (counts.get(value) || 0) + 1)
   }
@@ -447,6 +453,8 @@ onUnmounted(() => { stopped = true; importRequest++; clearTimeout(importTimeout)
   <section class="parts-workbook" :class="{'pw-resizing-columns':resizing?.axis==='column','pw-resizing-rows':resizing?.axis==='row'}" :aria-label="tx('备品备件表格','Parts workbook')">
     <header class="pw-heading"><slot name="navigation"/><div class="pw-title" :title="book?.sourceFile"><span class="pw-icon"><Table2 :size="23" /></span><div><h1>{{tx('备品备件总表','Parts order workbook')}}</h1><p>{{book?.sourceFile || '2026 Parts order list发澳洲.xlsx'}}</p></div></div><div class="pw-status" :class="{failed:error}" aria-live="polite"><LoaderCircle v-if="loading || saving" :size="17" class="pw-spin"/><CloudCheck v-else :size="17"/><span>{{status}}<small v-if="base?.savedAt">{{new Date(base.savedAt).toLocaleTimeString(language==='en'?'en-AU':'zh-CN')}} · {{tx('版本','Version')}} {{base.revision}}</small></span></div><slot name="header-actions"/></header>
     <div v-if="error" class="pw-error" role="alert"><span>{{error}}</span><button v-if="conflict" @click="reviewRemote">{{tx('查看云端版本','Review cloud version')}}</button><button v-else @click="retry">{{tx('重试','Retry')}}</button></div>
+    <p v-if="closedSapCount" class="pw-footnote">{{tx('另有 '+closedSapCount+' 条 SAP 补充明细不符合未收货订单口径，已隐藏；Excel 原有行不受影响。',closedSapCount+' additional SAP lines do not qualify as open purchase orders and are hidden; original Excel rows are preserved.')}}</p>
+    <p v-if="dateScope.hidden.size" class="pw-footnote">{{dateScope.cutoff?tx('SAP 补充仅显示订单日期晚于 '+dateScope.cutoff+' 的明细（Excel 最早订单日期）；同日、更早或日期不明的 '+dateScope.hidden.size+' 条不显示，原记录保留。','SAP supplements must be dated after '+dateScope.cutoff+' (earliest Excel order date); '+dateScope.hidden.size+' earlier, same-day or undated lines are hidden, with stored records preserved.'):tx('Excel 没有有效订单日期，暂不显示 SAP 补充明细；原记录保留。','No valid Excel order date: SAP supplements are hidden, with stored records preserved.')}}</p>
     <input ref="importInput" type="file" accept=".xlsx" hidden @change="readImportFile"/><p v-if="importNotice" class="pw-export-notice" role="status">{{importNotice}}</p>
     <div v-if="exportError" class="pw-error" role="alert">{{exportError}}</div><p v-if="exportNotice" class="pw-export-notice" role="status">{{exportNotice}}</p>
     <div v-if="!book" class="pw-loading">{{loading ? tx('正在加载完整工作簿…','Loading the complete workbook…') : tx('工作簿加载失败，请重试。','Could not load the workbook. Please retry.')}}</div>

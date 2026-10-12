@@ -1,7 +1,11 @@
 import { cloneBook, PARTS_FIELDS, sheetValues } from './parts-workbook.mjs'
 import { normalizedIdentity, applySapSnapshotReferences } from './sap-reference.mjs'
+import { sapWorkbookDateScope, eligibleSapDate } from './parts-workbook-scope.mjs'
 
 const lineKey = (po, item) => `${normalizedIdentity(po)}/${normalizedIdentity(item)}`
+const openPoFacts = sap => ({eligible:sap?.OPEN_PO_ELIGIBLE === true,
+  reason:sap?.OPEN_PO_REASON || (sap?.OPEN_PO_ELIGIBLE === true ? '' : 'open_status_unavailable'),
+  openQty:sap?.OPEN_SCHEDULE_QTY ?? null, scheduleCount:sap?.OPEN_SCHEDULE_COUNT ?? null})
 const mainSheet = book => book?.sheets.find(s => s.id === (book.mainSheetId || 's0'))
 const fieldPositions = (book, sheet) => Object.fromEntries(PARTS_FIELDS.map((field, c) => [field,
   sheet.columns.findIndex(col => col.id === (book.importId ? sheet.fieldColumns?.[field] : `s0-c${c}`))]))
@@ -80,16 +84,19 @@ export function retainSapWorkbookRows(replacement, previous) {
 export function mergeSapWorkbook(book, orders, rows, run) {
   if (!book || !run) return book
   book = migrateSapPending(book, rows)
-  if (book.sapRefreshRun === run) return book
+  const scope = sapWorkbookDateScope(book)
+  if (book.sapRefreshRun === run && book.sapDateScopeVersion === 2 && book.sapOpenPoVersion === 1 && book.sapDateCutoff === scope.cutoff) return book
   const next = cloneBook(book), sheet = next.sheets.find(s => s.id === (next.mainSheetId || 's0'))
   if (!sheet) return book
   const columns = Object.fromEntries(PARTS_FIELDS.map((field, c) => [field,
     sheet.columns.findIndex(col => col.id === (book.importId ? sheet.fieldColumns?.[field] : `s0-c${c}`))]))
   if (['po', 'line', 'material', 'qty'].some(field => columns[field] < 0)) return book
   const byRow = new Map(orders.map(o => [o.workbookRowId, o])), represented = new Set()
+  const sapByLine = new Map(rows.map(sap => [lineKey(sap.EBELN,sap.EBELP),sap]))
   for (const row of sheet.rows.slice(sheet.headerRows)) {
     const order = byRow.get(row.id)
     const anchor = row.sapAnchor || order?.sapAnchor
+    if (row.sapOrigin) row.sapOpenPo = openPoFacts(sapByLine.get(lineKey(anchor?.po ?? row.cells[columns.po],anchor?.item ?? row.cells[columns.line])))
     if (anchor) {
       represented.add(lineKey(anchor.po, anchor.item))
       row.sapAnchor = cloneBook(anchor)
@@ -107,6 +114,8 @@ export function mergeSapWorkbook(book, orders, rows, run) {
   const existingIds = new Set(sheet.rows.map(row => row.id))
   let sequence = Math.max(0, ...sheet.rows.slice(sheet.headerRows).map(r => Number(r.cells[columns.seq]) || 0))
   for (const sap of rows) {
+    if (!eligibleSapDate(sap.BEDAT, scope.cutoff)) continue
+    if (sap.OPEN_PO_ELIGIBLE !== true) continue
     const key = lineKey(sap.EBELN, sap.EBELP)
     if (represented.has(key)) continue
     const id = `sap-${normalizedIdentity(sap.EBELN)}-${normalizedIdentity(sap.EBELP)}`
@@ -117,11 +126,14 @@ export function mergeSapWorkbook(book, orders, rows, run) {
       completion: null}
     const cells = sheet.columns.map(() => null)
     for (const [field, value] of Object.entries(fields)) if (columns[field] >= 0) cells[columns[field]] = value
-    sheet.rows.push({id, cells, formulas: {}, types: {}, sapOrigin: true, sapPending: true, sapNewRun: run,
+    sheet.rows.push({id, cells, formulas: {}, types: {}, sapOrigin: true, sapPending: true, sapNewRun: run, sapOpenPo:openPoFacts(sap),
       sapAnchor: {po: String(sap.EBELN), item: String(sap.EBELP)}, sapLineConvention: 'sap',
       importKey: JSON.stringify([String(sap.EBELN), String(sap.EBELP), String(sap.MATNR || '')])})
     represented.add(key)
   }
   next.sapRefreshRun = run
+  next.sapDateScopeVersion = 2
+  next.sapOpenPoVersion = 1
+  next.sapDateCutoff = scope.cutoff
   return next
 }

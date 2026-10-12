@@ -8,11 +8,11 @@ import { reconcile, isException, isHistoricalOrder, resolveFact } from '../src/r
 import { exceptionExportRows } from '../src/exception-export.mjs'
 import { connectPublicWorkspace } from '../src/public-firebase-store.mjs'
 
-const sap=(po='4500000001',extra={})=>({EBELN:po,EBELP:'00010',MATNR:'MAT1',MENGE:5,MEINS:'EA',TXZ01:'A part',WAERS:'AUD',...extra})
+const sap=(po='4500000001',extra={})=>({EBELN:po,EBELP:'00010',MATNR:'MAT1',MENGE:5,MEINS:'EA',TXZ01:'A part',WAERS:'AUD',BEDAT:'20260902',OPEN_PO_ELIGIBLE:true,OPEN_SCHEDULE_QTY:5,OPEN_SCHEDULE_COUNT:1,...extra})
 const workbook=()=>({sourceFile:'China.xlsx',sheets:[{id:'s0',name:'Sheet1',headerRows:1,merges:[],
   columns:PARTS_FIELDS.map((_,i)=>({id:`s0-c${i}`})),
   rows:[{id:'header',cells:PARTS_FIELDS,formulas:{},types:{}},...['OK','澳洲取消订单'].map((status,i)=>({id:`row${i}`,
-    cells:PARTS_FIELDS.map(f=>({seq:i+1,po:`450000000${i+1}`,line:10,material:'MAT1',qty:5,completion:status,notes:'Keep China notes'}[f]??null)),
+    cells:PARTS_FIELDS.map(f=>({seq:i+1,po:`450000000${i+1}`,line:10,material:'MAT1',qty:5,ordered:'2026-09-01',completion:status,notes:'Keep China notes'}[f]??null)),
     formulas:{},types:{},fills:{'s0-c25':'#E2F0D9'}}))]}]})
 const source={orders:[],shipments:[],issues:[]}
 function linked(book,rows){const state=sharedWorkbookState(source,{},book).state;applySapSnapshotReferences(state,rows,1800000000000);return state.orders}
@@ -67,6 +67,26 @@ test('China reimport owns matching statuses and retains absent pending and handl
   assert.equal(again.sheets[0].rows.length,6)
   assert.equal(again.sheets[0].rows.at(-1).workbookOrderId,next.sheets[0].rows.at(-1).workbookOrderId)
   assert.equal(mergeSapWorkbook(next,linked(next,rows),rows,'run2').sheets[0].rows.length,6)
+})
+
+test('open PO scope controls only supplements, retains closed Excel references and preserves human cells through close/reopen',()=>{
+  const rows=[sap('4500000001',{OPEN_PO_ELIGIBLE:false,OPEN_PO_REASON:'delivery_complete'}),sap('4500000002'),sap('4500000003'),sap('4500000004',{OPEN_PO_ELIGIBLE:false})]
+  const b=mergeSapWorkbook(workbook(),linked(workbook(),rows),rows,'run1')
+  assert.equal(b.sheets[0].rows.length,4)
+  const generated=b.sheets[0].rows.at(-1)
+  setCell(b.sheets[0],generated.id,26,'Human follow-up to preserve')
+  const before=structuredClone(generated.cells)
+  const closed=rows.map(r=>r.EBELN==='4500000003'?{...r,OPEN_PO_ELIGIBLE:false,OPEN_PO_REASON:'no_open_schedule',OPEN_SCHEDULE_QTY:0}:r)
+  const next=mergeSapWorkbook(b,linked(b,closed),closed,'run2')
+  assert.deepEqual(next.sheets[0].rows.at(-1).cells,before)
+  const orders=linked(next,closed)
+  assert.equal(orders.length,2)
+  assert.equal(orders.find(o=>o.po==='4500000001').sapReferenceStatus,'matched')
+  assert.equal(orders.find(o=>o.po==='4500000001').importCompletion,'OK')
+  const reopened=mergeSapWorkbook(next,orders,rows,'run3')
+  assert.equal(linked(reopened,rows).length,3)
+  assert.deepEqual(reopened.sheets[0].rows.at(-1).cells,before)
+  assert.equal(reopened.sheets[0].rows.length,4)
 })
 
 test('editing a pending SAP row starts NG processing, and invalid edits or untouched values do not',()=>{

@@ -15,6 +15,7 @@ import * as persistence from '../src/persistence.mjs'
 import * as partsWorkbook from '../src/parts-workbook.mjs'
 import * as sapReference from '../src/sap-reference.mjs'
 import * as partsWorkbookStore from '../src/parts-workbook-store.mjs'
+import * as partsWorkbookScope from '../src/parts-workbook-scope.mjs'
 
 // Render the real page templates in Node. Only the third-party UI wrappers are
 // replaced; this checks language coverage without browser or visual testing.
@@ -32,7 +33,7 @@ function component(file, expose=''){
   const imports={vue:Vue,'./manager-overview.mjs':managerOverview,'./sap-reference.mjs':sapReference,'./domain.mjs':domain,'./analytics.mjs':analytics,'./i18n.mjs':i18n,'./translations.mjs':translations,'./reconciliation.mjs':reconciliation,
     './exception-export.mjs':{downloadExceptions:(...args)=>exceptionDownload(...args)},
     './parts-workbook-download.mjs':{createPartsExportWorker(){throw new Error('No downloads in SSR tests')}},
-    './parts-workbook.mjs':partsWorkbook,'./parts-workbook-store.mjs':{...partsWorkbookStore,createPartsWorkbookStore:(...args)=>workbookStoreFactory(...args)},
+    './parts-workbook.mjs':partsWorkbook,'./parts-workbook-scope.mjs':partsWorkbookScope,'./parts-workbook-store.mjs':{...partsWorkbookStore,createPartsWorkbookStore:(...args)=>workbookStoreFactory(...args)},
     './persistence.mjs':persistence,'./firebase-store.mjs':{cloudConfigured:false,connectCloud:(...args)=>cloudFactory(...args)},
     './runtime-config.mjs':{publicTestEnabled:false},'./public-firebase-store.mjs':{connectPublicWorkspace:async()=>{throw new Error('No public Firebase calls in SSR tests')}},
     'frappe-ui':{Button:wrapper,Badge:wrapper,Dialog:dialog},'lucide-vue-next':new Proxy({},{get:()=>icon})}
@@ -623,6 +624,8 @@ test('parts NEW badge sits in the sequence cell and completion editor retains al
   row.cells[25]='澳洲取消订单'
   assert.doesNotMatch(await renderGrid(false),/class="pw-status-(ng|ok)"/)
   row.cells[25]='NG'
+  const baseline=structuredClone(row);baseline.id='china-date-baseline';baseline.cells[13]='2025-01-01';baseline.cells[25]='OK';delete baseline.sapNewRun
+  book.sheets[0].rows.push(baseline);row.cells[13]='2025-01-02'
   row.sapOrigin=true;row.sapPending=true;row.cells[25]=null
   const pending=await renderGrid(false)
   assert.match(pending,/<tr[^>]+class="pw-status-sap"/)
@@ -637,6 +640,29 @@ test('parts NEW badge sits in the sequence cell and completion editor retains al
   assert.match(editor,/<option value="澳洲取消订单"/)
   book.sapRefreshRun='refresh3'
   assert.doesNotMatch(await renderGrid(false),/class="pw-new-badge"/)
+})
+
+test('parts date scope excludes old SAP from rendered rows, status totals, filters and bulk selection',async()=>{
+  i18n.setLanguage('zh')
+  const book=JSON.parse(fs.readFileSync(new URL('../public/parts-workbook.json',import.meta.url),'utf8'))
+  const sheet=book.sheets[0];sheet.rows=sheet.rows.slice(0,sheet.headerRows+1)
+  const china=sheet.rows.at(-1);china.cells[13]='2025-09-12';china.cells[25]='OK'
+  const old=structuredClone(china);old.id='hidden-old-sap';old.sapOrigin=true;old.sapPending=true;old.cells[13]='20250911';old.cells[2]='HIDDEN_OLD_PO';old.cells[25]=null
+  const current=structuredClone(old);current.id='visible-new-sap';current.cells[13]='20250913';current.cells[2]='VISIBLE_CURRENT_PO'
+  const closed=structuredClone(current);closed.id='hidden-closed-sap';closed.cells[2]='HIDDEN_CLOSED_PO';closed.sapOpenPo={eligible:false,reason:'no_open_schedule',openQty:0}
+  sheet.rows.push(old,current,closed)
+  const before=structuredClone(book)
+  const Parts=component('PartsWorkbook.vue','book,loading,matches,completionCounts,openFilter,filterOptions,toggleAllRows,selectedRows,dirty')
+  const html=await renderToString(Vue.createSSRApp({...Parts,setup(props,ctx){return Parts.setup(props,{...ctx,expose(s){
+    s.book.value=book;s.loading.value=false
+    assert.equal(s.matches.value.length,2);assert.equal(s.completionCounts.value.pending,1);assert.equal(s.completionCounts.value.OK,1)
+    s.openFilter(2);assert.ok(!s.filterOptions.value.some(o=>o.value==='HIDDEN_OLD_PO'))
+    assert.ok(!s.filterOptions.value.some(o=>o.value==='HIDDEN_CLOSED_PO'))
+    s.toggleAllRows();assert.equal(s.selectedRows.value.length,2);assert.ok(!s.selectedRows.value.includes(old.id));assert.equal(s.dirty.value,false)
+  }})}}))
+  assert.doesNotMatch(html,/data-row-id="hidden-old-sap"/);assert.match(html,/data-row-id="visible-new-sap"/)
+  assert.doesNotMatch(html,/data-row-id="hidden-closed-sap"/)
+  assert.match(html,/2025-09-12/);assert.deepEqual(book,before)
 })
 
 test('navigation places exceptions and tasks between parts and orders; task page excludes data discrepancies',async()=>{

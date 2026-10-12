@@ -136,6 +136,30 @@ def extract(config, connect=None):
             conn.close()
 
 
+def open_po_facts(po, schedules):
+    """Reference page's qualifying EKET lines, aggregated without overwriting.
+
+    Keep the complete PO reference table: Excel's completed rows still need
+    material/PO checks. These facts constrain only SAP-generated supplements.
+    """
+    eligible_lines = []
+    for schedule in schedules:
+        qty, received = schedule.get('MENGE'), schedule.get('WEMNG')
+        received = 0 if received is None else received
+        if (isinstance(qty, (int, float)) and isinstance(received, (int, float))
+                and math.isfinite(qty) and math.isfinite(received) and qty > 0 and qty - received > 0):
+            eligible_lines.append(qty - received)
+    reason = ('excluded_po_prefix' if str(po.get('EBELN', '')).startswith('70000') else
+              'excluded_material_prefix' if str(po.get('MATNR', '')).strip().upper().startswith('D14') else
+              'header_status_unavailable' if 'HEADER_LOEKZ' not in po else
+              'header_deleted' if str(po.get('HEADER_LOEKZ') or '').strip() == 'L' else
+              'item_deleted' if str(po.get('LOEKZ') or '').strip() == 'L' else
+              'delivery_complete' if str(po.get('ELIKZ') or '').strip() == 'X' else
+              'no_open_schedule' if not eligible_lines else '')
+    return {'OPEN_PO_ELIGIBLE': not reason, 'OPEN_PO_REASON': reason,
+            'OPEN_SCHEDULE_QTY': sum(eligible_lines), 'OPEN_SCHEDULE_COUNT': len(eligible_lines)}
+
+
 def build_snapshot(raw):
     if (raw.get('schemaVersion') != 1 or not isinstance(raw.get('startedAt'), (int, float)) or
             not isinstance(raw.get('finishedAt'), (int, float)) or raw['finishedAt'] < raw['startedAt']):
@@ -156,6 +180,12 @@ def build_snapshot(raw):
         tables[name], counts[name] = records, len(rows)
     if not counts['po']:
         raise ValueError('empty_po_extraction')
+    schedules_by_line = {}
+    for schedule in tables['schedules'].values():
+        schedules_by_line.setdefault((str(schedule['EBELN']), str(schedule['EBELP'])), []).append(schedule)
+    for key, po in tables['po'].items():
+        schedules = schedules_by_line.get((str(po['EBELN']), str(po['EBELP'])), [])
+        tables['po'][key] = {**po, **open_po_facts(po, schedules)}
     digest = hashlib.sha256(encode({'scope': raw['scope'], 'tables': tables}).encode('utf-8')).hexdigest()
     return {**{k: raw[k] for k in ('schemaVersion', 'startedAt', 'finishedAt', 'scope')},
             'tables': tables, 'counts': counts, 'hash': digest}

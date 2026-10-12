@@ -5,6 +5,7 @@ import { loadSapReferences, refreshSapSnapshot, applySapSnapshotReferences } fro
 import { createSapAnchorStore } from './sap-anchor-store.mjs'
 import { createPartsWorkbookStore, decodePartsWorkbook } from './parts-workbook-store.mjs'
 import { mergeSapWorkbook } from './sap-workbook-sync.mjs'
+import { sapWorkbookDateScope } from './parts-workbook-scope.mjs'
 export const PUBLIC_DATABASE='https://supplier-collaboration-30ddf-default-rtdb.asia-southeast1.firebasedatabase.app'
 export async function connectPublicWorkspace(onChange,onError,{workspace='excel-20260904',fetcher=fetch,interval=15000,databaseURL=PUBLIC_DATABASE,persistSapLinks=true}={}){
   if(!/^[a-z0-9-]+$/.test(workspace))throw new Error('invalid_workspace')
@@ -41,7 +42,7 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
       try{const nextRun=await refreshSapSnapshot(data,{databaseURL,fetcher,previousRun:sapRun,anchorStore});if(nextRun!==sapRun){sapRun=nextRun;changed=true}if(sapRefreshFailed)changed=true;sapRefreshFailed=false;for(const o of data.orders)if(o.sapReferenceRefreshError){o.sapReferenceRefreshError=false;changed=true}}catch{sapRefreshFailed=true;for(const o of data.orders)o.sapReferenceRefreshError=true;changed=true}
       if(next>revision){if(key&&version?.revision!==next)throw new Error('invalid_revision');latest=version||{};revision=next;changed=true}
       if(parts&&parts.revision>workbookRevision){if(parts.schemaVersion!==1||typeof parts.bookJson!=='string')throw new Error('invalid_workbook');workbook=decodePartsWorkbook(parts);workbookRevision=parts.revision;workbookSavedAt=parts.savedAt;changed=true}
-      if(workbook&&data.sapRows&&sapRun&&(workbook.sapRefreshRun!==sapRun||workbook.sapStatusVersion!==1)){
+      if(workbook&&data.sapRows&&sapRun&&(workbook.sapRefreshRun!==sapRun||workbook.sapStatusVersion!==1||workbook.sapDateScopeVersion!==2||workbook.sapOpenPoVersion!==1||workbook.sapDateCutoff!==sapWorkbookDateScope(workbook).cutoff)){
         try {
           const current=await workbookStore.load()
           if(current.revision!==workbookRevision)throw new Error('save_conflict')

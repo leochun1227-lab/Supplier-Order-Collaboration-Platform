@@ -40,6 +40,39 @@ class FakeDB:
 
 
 class SyncTests(unittest.TestCase):
+    def test_open_po_aggregates_qualifying_schedule_lines_without_overwriting(self):
+        raw = extraction()
+        raw['tables']['po'][0].update(HEADER_LOEKZ='', LOEKZ='', ELIKZ='', MATNR='PART1')
+        raw['tables']['schedules'] = [
+            {'EBELN': '4500000001', 'EBELP': '00010', 'ETENR': str(i), 'MENGE': qty, 'WEMNG': received}
+            for i, (qty, received) in enumerate([(10, 4), (8, 3), (5, 5), (0, 0), (2, 3)])]
+        before = copy.deepcopy(raw)
+        result = sync.build_snapshot(raw)
+        po = next(iter(result['tables']['po'].values()))
+        self.assertTrue(po['OPEN_PO_ELIGIBLE'])
+        self.assertEqual(po['OPEN_SCHEDULE_QTY'], 11)
+        self.assertEqual(po['OPEN_SCHEDULE_COUNT'], 2)
+        self.assertEqual(po['MENGE'], 10)  # Original PO quantity is never rewritten.
+        self.assertEqual(result['counts']['schedules'], 5)
+        self.assertEqual(raw, before)
+
+    def test_open_po_exclusions_retain_full_po_reference_records(self):
+        baseline = {'EBELN': '4500000001', 'MATNR': 'PART1', 'HEADER_LOEKZ': '', 'LOEKZ': '', 'ELIKZ': ''}
+        schedules = [{'MENGE': 10, 'WEMNG': None}]
+        self.assertTrue(sync.open_po_facts(baseline, schedules)['OPEN_PO_ELIGIBLE'])
+        for changes, reason in [({'EBELN': '7000012345'}, 'excluded_po_prefix'),
+                                ({'MATNR': ' d14abc '}, 'excluded_material_prefix'),
+                                ({'HEADER_LOEKZ': 'L'}, 'header_deleted'),
+                                ({'LOEKZ': 'L'}, 'item_deleted'),
+                                ({'ELIKZ': 'X'}, 'delivery_complete')]:
+            facts = sync.open_po_facts({**baseline, **changes}, schedules)
+            self.assertFalse(facts['OPEN_PO_ELIGIBLE'])
+            self.assertEqual(facts['OPEN_PO_REASON'], reason)
+        self.assertTrue(sync.open_po_facts({**baseline, 'LOEKZ': 'S'}, schedules)['OPEN_PO_ELIGIBLE'])
+        self.assertFalse(sync.open_po_facts(baseline, [])['OPEN_PO_ELIGIBLE'])
+        self.assertFalse(sync.open_po_facts(baseline, [{'MENGE': 10, 'WEMNG': 10}])['OPEN_PO_ELIGIBLE'])
+        self.assertFalse(sync.open_po_facts({'EBELN': '4500000001'}, schedules)['OPEN_PO_ELIGIBLE'])
+
     def test_validates_complete_generation_and_duplicates(self):
         raw = extraction()
         self.assertEqual(sync.build_snapshot(raw)['counts']['po'], 1)

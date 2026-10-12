@@ -1,5 +1,6 @@
 import { cloneBook, sheetValues, PARTS_FIELDS, isSapPending } from './parts-workbook.mjs'
 import { hydrateState } from './persistence.mjs'
+import { sapWorkbookDateScope, hiddenSapSupplement } from './parts-workbook-scope.mjs'
 
 // Column IDs and original evidence row IDs survive renames, sorting and insertion.
 const FIELDS = PARTS_FIELDS
@@ -36,6 +37,7 @@ export function workbookProjection(source, book) {
   if (!sheet) return {source:original,baseline,changed,hidden}
   baseline.importId=book.importId||null
   const values = sheetValues(sheet), byRow = new Map()
+  const dateScope = sapWorkbookDateScope(book, sheet, values)
   const replacement=!!book.importId
   if(replacement) {
     // A new file has new row positions. Reuse an existing identity only when the
@@ -60,6 +62,11 @@ export function workbookProjection(source, book) {
   const linked = [], linkedShipments = new Map(), originalShipments = new Map(original.shipments.map(s=>[s.id,s]))
   for (let r=sheet.headerRows;r<sheet.rows.length;r++) {
     const row = sheet.rows[r], old = byRow.get(row.id), f = {}, differences = new Set()
+    if (hiddenSapSupplement(row, dateScope)) {
+      if (old) hidden.add(old.id)
+      hidden.add(row.workbookOrderId || `PARTS-${replacement?book.importId+'-':''}${row.id}`)
+      continue
+    }
     for (let c=0;c<FIELDS.length;c++) {
       const field = FIELDS[c], position = columns.get(replacement?sheet.fieldColumns?.[field]:`s0-c${c}`)
       f[field] = position === undefined ? null : values[r][position]
