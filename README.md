@@ -4,7 +4,7 @@ Interactive Chinese/English prototype using **Frappe UI 0.1.278**, Vue 3 and Vit
 
 Current public-test mode loads 1,253 imported ledger records from Firebase and persists collaboration changes there. It uses Frappe UI components, not an installed Frappe Framework / ERPNext backend. Firebase currently uses the public read/write rules explicitly selected for testing; supplier authentication is not yet enabled.
 
-**Deployment:** [Render website and Windows SAP sync instructions](docs/RENDER-SAP-SETUP.md). Render uses `npm ci && npm run build` and publishes `dist`. On a separate Windows computer, run `setup-sap-sync.bat` once, then schedule `run.bat` twice daily. The Python sync publishes read-only SAP raw snapshots separately; it does not yet project those snapshots into the order workbench. No task is created automatically.
+**Deployment:** [Render website and Windows SAP sync instructions](docs/RENDER-SAP-SETUP.md). Render uses `npm ci && npm run build` and publishes `dist`. On the intended sync computer, run `setup-sap-sync.bat`, verify `run.bat`, then run `install-daily-task.bat` to register `Regent Supplier SAP to Firebase` in Windows Task Scheduler at 17:00 local time (set the computer timezone to Sydney). The task uses the same pipeline as `run.bat`: Python reads SAP and publishes snapshots to Firebase, then Node appends missing SAP rows to the Firebase workbook while preserving existing cells and human work. Data refreshes require no Git push, web build, open browser or running Codex app. The sync computer must be awake, the configured Windows user signed in, and the SAP network and runtimes available; setup and manual execution do not create duplicate schedules.
 
 ## Run
 

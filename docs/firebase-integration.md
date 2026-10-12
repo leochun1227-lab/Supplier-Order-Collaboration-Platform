@@ -1,5 +1,11 @@
 # Firebase 保存与 SAP 同步
 
+## 2026-10-12：每日数据直接更新 Firebase
+
+当前 `run.bat` 会执行 SAP 只读快照发布和总表补充保存两步，全部数据写入既有 `supplierCollaboration`。不运行 Git，也不依赖网页打开。计划由另一台目标电脑的 Windows 任务计划程序每天 17:00 执行；提供 `install-daily-task.bat` 安装入口，目标电脑仍需配置并验收。本机临时任务已撤销，之前的 Codex 定时任务已停用。目标电脑需开机、保持唤醒、配置凭据的 Windows 用户已登录，并可连接公司内网，无需打开 Codex。完整流程此前已在本机实际成功执行，快照轮次与 `sync/workbookLastCheck` 一致，现有 Excel 的 106 NG、1,356 OK、15 取消保持不变，6,899 条 SAP 补充订单单独待处理；此验证不代替目标电脑的实测。
+
+日常数据无需推送或重新部署；应用功能代码发生变化时仍需一次发布。最新部署与执行说明以 [RENDER-SAP-SETUP.md](RENDER-SAP-SETUP.md) 为准，下面有明确日期的旧说明保留为历史记录。
+
 ## 2026-09-10：部署入口更新
 
 SAP 同步已改为 `run.bat` 调用独立 Python 程序；目标电脑执行一次 `setup-sap-sync.bat` 后，可自行设置每天两次任务。开发电脑未创建任务，也未运行本轮真实 SAP 提取。新程序沿用用户授权的 Firebase 公开测试模式，保留完整快照并验证回读，不修改网页协作区。安装步骤与 Render 配置见 [RENDER-SAP-SETUP.md](RENDER-SAP-SETUP.md)。下文关于旧 PowerShell/Node 同步及私有试用的说明属于历史设计，以新部署说明为准。

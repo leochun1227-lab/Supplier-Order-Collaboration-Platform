@@ -3,7 +3,7 @@ import { sharedWorkbookState, retainHiddenWorkbookRecords } from './parts-workbo
 import { sheetValues } from './parts-workbook.mjs'
 import { loadSapReferences, refreshSapSnapshot, applySapSnapshotReferences } from './sap-reference.mjs'
 import { createSapAnchorStore } from './sap-anchor-store.mjs'
-import { createPartsWorkbookStore } from './parts-workbook-store.mjs'
+import { createPartsWorkbookStore, decodePartsWorkbook } from './parts-workbook-store.mjs'
 import { mergeSapWorkbook } from './sap-workbook-sync.mjs'
 export const PUBLIC_DATABASE='https://supplier-collaboration-30ddf-default-rtdb.asia-southeast1.firebasedatabase.app'
 export async function connectPublicWorkspace(onChange,onError,{workspace='excel-20260904',fetcher=fetch,interval=15000,databaseURL=PUBLIC_DATABASE,persistSapLinks=true}={}){
@@ -25,7 +25,7 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
   }
   function deliver(){
     const {state}=compose(), summary={...source.summary}
-    if(workbook){summary.masterRecords=state.orders.length;summary.masterCompletion={NG:0,OK:0,'澳洲取消订单':0};for(const o of state.orders){const key=o.cancelled?'澳洲取消订单':o.importCompletion||'NG';summary.masterCompletion[key]=(summary.masterCompletion[key]||0)+1};summary.workbookSheets=workbook.sheets.filter(s=>s.id!==(workbook.mainSheetId||'s0')).map(s=>({name:s.name,values:sheetValues(s)}));summary.workbookRevision=workbookRevision}
+    if(workbook){summary.masterRecords=state.orders.length;summary.masterCompletion={NG:0,OK:0,'澳洲取消订单':0,SAP:0};for(const o of state.orders){const key=o.sapPending?'SAP':o.cancelled?'澳洲取消订单':o.importCompletion||'未评价';summary.masterCompletion[key]=(summary.masterCompletion[key]||0)+1};summary.workbookSheets=workbook.sheets.filter(s=>s.id!==(workbook.mainSheetId||'s0')).map(s=>({name:s.name,values:sheetValues(s)}));summary.workbookRevision=workbookRevision}
     onChange({state,revision,generation:source.generation,savedAt:Math.max(latest.at||0,workbookSavedAt||0)||null,email:'Public test',summary,workbookRevision})
   }
   async function refresh(){
@@ -40,8 +40,8 @@ export async function connectPublicWorkspace(onChange,onError,{workspace='excel-
       let changed=false
       try{const nextRun=await refreshSapSnapshot(data,{databaseURL,fetcher,previousRun:sapRun,anchorStore});if(nextRun!==sapRun){sapRun=nextRun;changed=true}if(sapRefreshFailed)changed=true;sapRefreshFailed=false;for(const o of data.orders)if(o.sapReferenceRefreshError){o.sapReferenceRefreshError=false;changed=true}}catch{sapRefreshFailed=true;for(const o of data.orders)o.sapReferenceRefreshError=true;changed=true}
       if(next>revision){if(key&&version?.revision!==next)throw new Error('invalid_revision');latest=version||{};revision=next;changed=true}
-      if(parts&&parts.revision>workbookRevision){if(parts.schemaVersion!==1||typeof parts.bookJson!=='string')throw new Error('invalid_workbook');workbook=JSON.parse(parts.bookJson);workbookRevision=parts.revision;workbookSavedAt=parts.savedAt;changed=true}
-      if(workbook&&data.sapRows&&sapRun&&workbook.sapRefreshRun!==sapRun){
+      if(parts&&parts.revision>workbookRevision){if(parts.schemaVersion!==1||typeof parts.bookJson!=='string')throw new Error('invalid_workbook');workbook=decodePartsWorkbook(parts);workbookRevision=parts.revision;workbookSavedAt=parts.savedAt;changed=true}
+      if(workbook&&data.sapRows&&sapRun&&(workbook.sapRefreshRun!==sapRun||workbook.sapStatusVersion!==1)){
         try {
           const current=await workbookStore.load()
           if(current.revision!==workbookRevision)throw new Error('save_conflict')

@@ -1,4 +1,5 @@
 export const cloneBook = value => JSON.parse(JSON.stringify(value))
+export const isSapPending = row => !!row?.sapOrigin && row.sapPending === true
 export const PARTS_FIELDS = ['seq','mode','po','line','van','description_zh','description_en','supplier_reference','material','qty','category','so','buyer','ordered','agreed_etd','planned_etd','manager','eta_china','actual_ship','shipped','remaining','loaded_van','location','container','awb','completion','notes']
 const headerAliases = [
   ['序号No.','序号','No.'],['属性Attribute','属性','Attribute','运输方式'],['订单号Purchase Order','订单号','Purchase Order','PO'],['Line No','行号','订单行','PO Item'],
@@ -130,6 +131,17 @@ export function sheetValues(sheet) {
   return sheet.rows.map((row, r) => row.cells.map((_, c) => get(r, c)))
 }
 export function setCell(sheet, rowId, col, input) {
+  const row = sheet.rows.find(r => r.id === rowId)
+  const before = row && JSON.stringify([row.cells, row.formulas])
+  writeCell(sheet, rowId, col, input)
+  if (isSapPending(row) && before !== JSON.stringify([row.cells, row.formulas])) {
+    row.sapPending = false
+    row.sapHandledAt = new Date().toISOString()
+    const completion = sheet.columns.findIndex(c => c.id === (sheet.fieldColumns?.completion || 's0-c25'))
+    if (completion >= 0 && completion !== col && !row.cells[completion]) row.cells[completion] = 'NG'
+  }
+}
+function writeCell(sheet, rowId, col, input) {
   const row = sheet.rows.find(r => r.id === rowId)
   if (!row || !sheet.columns[col]) throw new Error('missing_cell')
   const text = String(input)

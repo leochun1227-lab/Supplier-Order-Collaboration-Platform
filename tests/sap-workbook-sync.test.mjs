@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PARTS_FIELDS, setCell } from '../src/parts-workbook.mjs'
-import { mergeSapWorkbook } from '../src/sap-workbook-sync.mjs'
+import { mergeSapWorkbook, retainSapWorkbookRows, migrateSapPending } from '../src/sap-workbook-sync.mjs'
 import { sharedWorkbookState } from '../src/parts-workbook-link.mjs'
 import { applySapSnapshotReferences } from '../src/sap-reference.mjs'
 import { reconcile, isException, isHistoricalOrder, resolveFact } from '../src/reconciliation.mjs'
@@ -24,7 +24,8 @@ test('SAP adds missing orders once, leaves China cells intact and marks only the
   assert.equal(next.sheets[0].rows.length,4)
   for(let i=1;i<3;i++)for(const field of ['cells','formulas','fills'])assert.deepEqual(next.sheets[0].rows[i][field],before.sheets[0].rows[i][field])
   assert.equal(next.sheets[0].rows[3].sapNewRun,'run1')
-  assert.equal(next.sheets[0].rows[3].cells[25],'NG')
+  assert.equal(next.sheets[0].rows[3].cells[25],null)
+  assert.equal(next.sheets[0].rows[3].sapPending,true)
   assert.equal(mergeSapWorkbook(next,linked(next,rows),rows,'run1'),next)
   setCell(next.sheets[0],next.sheets[0].rows[3].id,25,'OK')
   setCell(next.sheets[0],next.sheets[0].rows[3].id,26,'Completed manually')
@@ -32,10 +33,69 @@ test('SAP adds missing orders once, leaves China cells intact and marks only the
   next=mergeSapWorkbook(next,linked(next,more),more,'run2')
   assert.equal(next.sheets[0].rows.length,5)
   assert.equal(next.sheets[0].rows[3].cells[25],'OK')
+  assert.equal(next.sheets[0].rows[3].sapPending,false)
   assert.equal(next.sheets[0].rows[3].cells[26],'Completed manually')
   assert.deepEqual(linked(next,more).filter(o=>o.isNew).map(o=>o.po),['4500000004'])
   const unchanged=mergeSapWorkbook(next,linked(next,more),more,'run3')
   assert.equal(linked(unchanged,more).filter(o=>o.isNew).length,0)
+})
+
+test('China reimport owns matching statuses and retains absent pending and handled SAP orders across imports',()=>{
+  const rows=[sap(),sap('4500000002'),sap('4500000003'),sap('4500000004'),sap('4500000005')]
+  const old=mergeSapWorkbook(workbook(),linked(workbook(),rows),rows,'run1')
+  const sheet=old.sheets[0]
+  setCell(sheet,'sap-4500000004-10',25,'OK')
+  setCell(sheet,'sap-4500000004-10',26,'Human completion notes')
+  const incoming=workbook()
+  const china=structuredClone(sheet.rows.find(r=>r.id==='sap-4500000003-10'))
+  for(const field of ['sapOrigin','sapPending','sapNewRun','sapAnchor','importKey'])delete china[field]
+  china.id='china-3';china.cells[25]='NG';china.cells[26]='China owns this note'
+  incoming.sheets[0].rows.push(china)
+  const before=structuredClone(incoming)
+  const next=retainSapWorkbookRows(incoming,old)
+  assert.deepEqual(incoming,before)
+  assert.deepEqual(next.sheets[0].rows.slice(0,4),before.sheets[0].rows)
+  assert.equal(next.sheets[0].rows.length,6)
+  const byPo=po=>next.sheets[0].rows.find(r=>r.cells[2]===po)
+  assert.equal(byPo('4500000003').sapOrigin,undefined)
+  assert.equal(byPo('4500000003').cells[25],'NG')
+  assert.equal(byPo('4500000004').cells[25],'OK')
+  assert.equal(byPo('4500000004').cells[26],'Human completion notes')
+  assert.equal(byPo('4500000005').sapPending,true)
+  assert.equal(byPo('4500000005').cells[25],null)
+  const again=retainSapWorkbookRows(incoming,next)
+  assert.equal(again.sheets[0].rows.length,6)
+  assert.equal(again.sheets[0].rows.at(-1).workbookOrderId,next.sheets[0].rows.at(-1).workbookOrderId)
+  assert.equal(mergeSapWorkbook(next,linked(next,rows),rows,'run2').sheets[0].rows.length,6)
+})
+
+test('editing a pending SAP row starts NG processing, and invalid edits or untouched values do not',()=>{
+  const rows=[sap(),sap('4500000002'),sap('4500000003')]
+  const book=mergeSapWorkbook(workbook(),linked(workbook(),rows),rows,'run1'),sheet=book.sheets[0],row=sheet.rows.at(-1)
+  setCell(sheet,row.id,26,'')
+  assert.equal(row.sapPending,true)
+  assert.throws(()=>setCell(sheet,row.id,26,'=VLOOKUP(A1,B1,1)'),/unsupported_formula/)
+  assert.equal(row.sapPending,true)
+  setCell(sheet,row.id,26,'Followed up with supplier')
+  assert.equal(row.sapPending,false);assert.equal(row.cells[25],'NG')
+  const next=mergeSapWorkbook(book,linked(book,rows),rows,'run2')
+  assert.equal(next.sheets[0].rows.at(-1).sapPending,false)
+  assert.equal(next.sheets[0].rows.at(-1).cells[26],'Followed up with supplier')
+})
+
+test('legacy migration clears only untouched automatically generated NG, preserving manual work',()=>{
+  const rows=[sap(),sap('4500000002'),sap('4500000003'),sap('4500000004'),sap('4500000005')]
+  const book=mergeSapWorkbook(workbook(),linked(workbook(),rows),rows,'run1')
+  delete book.sapStatusVersion
+  for(const row of book.sheets[0].rows.filter(r=>r.sapOrigin)){delete row.sapPending;row.cells[25]='NG'}
+  book.sheets[0].rows[4].cells[26]='A human note'
+  book.sheets[0].rows[5].cells[9]=7
+  const next=migrateSapPending(book,rows)
+  assert.equal(next.sheets[0].rows[3].sapPending,true)
+  assert.equal(next.sheets[0].rows[3].cells[25],null)
+  for(const r of [4,5]){assert.equal(next.sheets[0].rows[r].sapPending,false);assert.equal(next.sheets[0].rows[r].cells[25],'NG')}
+  assert.equal(next.sheets[0].rows[1].cells[25],'OK')
+  assert.equal(migrateSapPending(next,rows),next)
 })
 
 test('an anchored PO or material edit is an exception, never a duplicate new SAP order',()=>{
@@ -65,7 +125,7 @@ test('latest China replacement is the baseline and ambiguous SAP candidates do n
 })
 
 test('workspace refresh compares the latest workbook with SAP and saves append-only changes using a conditional write',async()=>{
-  let stored={schemaVersion:1,revision:1,bookJson:JSON.stringify(workbook())},writes=0,state,errors=[]
+  let stored={schemaVersion:1,revision:1,bookJson:JSON.stringify(workbook())},writes=0,state,summary,errors=[]
   const rows=[sap(),sap('4500000002'),sap('4500000003')]
   const pointer={run:'1800000000000-1234567890abcdef1234567890abcdef',finishedAt:1800000000000,hash:'hash',counts:{po:3}}
   const fetcher=async(url,options={})=>{
@@ -83,10 +143,12 @@ test('workspace refresh compares the latest workbook with SAP and saves append-o
     if(url.endsWith('/tables/po.json'))return Response.json(Object.fromEntries(rows.map((row,i)=>[i,row])))
     throw new Error(url)
   }
-  const cloud=await connectPublicWorkspace(packet=>state=packet.state,e=>errors.push(e),{databaseURL:'https://example.test',fetcher,persistSapLinks:false})
+  const cloud=await connectPublicWorkspace(packet=>{state=packet.state;summary=packet.summary},e=>errors.push(e),{databaseURL:'https://example.test',fetcher,persistSapLinks:false})
   try {
     assert.deepEqual(errors,[]);assert.equal(writes,1);assert.equal(state.orders.length,3)
     assert.equal(state.orders.find(o=>o.po==='4500000003').isNew,true)
+    assert.equal(summary.masterCompletion.NG,0)
+    assert.equal(summary.masterCompletion.SAP,1)
     assert.equal(state.orders[0].importCompletion,'OK');assert.equal(state.orders[1].cancelled,true)
     await cloud.refresh();assert.equal(writes,1,'polling an unchanged pointer never writes or re-adds rows')
     const latest=JSON.parse(stored.bookJson);latest.importId='replacement';delete latest.sapRefreshRun

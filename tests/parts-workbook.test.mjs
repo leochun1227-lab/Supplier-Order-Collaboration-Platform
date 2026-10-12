@@ -126,3 +126,30 @@ test('Firebase JSON preserves null cells, formulas, fills and dimensions, reject
   assert.deepEqual(reloaded.book, next)
   assert.equal(reloaded.book.sheets[0].rows[3].formulas[20], '=J4-T4')
 })
+
+test('large embedded Excel templates save in bounded strings and survive load and backup',async()=>{
+  let data=null,template=null
+  const fetcher=async(url,options={})=>{
+    if(url.includes('partsWorkbookTemplates')) {
+      if(options.method==='PUT')template=JSON.parse(options.body)
+      return Response.json(template)
+    }
+    if(options.method==='PUT'){
+      data=JSON.parse(options.body)
+      const strings=[data.bookJson,data.previousBookJson,...(data.templateBase64||[]),...(data.previousTemplateBase64||[])].filter(Boolean)
+      assert.ok(strings.every(s=>Buffer.byteLength(s)<10*1024*1024))
+      data.savedAt=1
+    }
+    return Response.json(data,{headers:{etag:'v1'}})
+  }
+  const store=createPartsWorkbookStore({fetcher})
+  const book={sourceFile:'large.xlsx',sourceHash:'a'.repeat(64),sheets:[{id:'s0',rows:[]}],importTemplateBase64:'a'.repeat(11*1024*1024)}
+  const first=await store.initialize(book)
+  assert.deepEqual(first.book,{...book,templateRef:book.sourceHash})
+  assert.equal(JSON.parse(data.bookJson).importTemplateBase64,undefined)
+  delete data.templateBase64
+  assert.equal((await store.load()).book.importTemplateBase64,book.importTemplateBase64,'an older client cannot discard the immutable template')
+  const saved=await store.replace({...book,sourceFile:'new.xlsx'},first)
+  assert.deepEqual(saved.backupBook,{...book,templateRef:book.sourceHash})
+  assert.equal(saved.book.importTemplateBase64,book.importTemplateBase64)
+})

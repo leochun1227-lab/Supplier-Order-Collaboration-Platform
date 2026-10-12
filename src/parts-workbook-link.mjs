@@ -1,4 +1,4 @@
-import { cloneBook, sheetValues, PARTS_FIELDS } from './parts-workbook.mjs'
+import { cloneBook, sheetValues, PARTS_FIELDS, isSapPending } from './parts-workbook.mjs'
 import { hydrateState } from './persistence.mjs'
 
 // Column IDs and original evidence row IDs survive renames, sorting and insertion.
@@ -68,7 +68,7 @@ export function workbookProjection(source, book) {
     const extras = sheet.columns.flatMap((col,c)=>/^s0-c\d+$/.test(col.id)?[]:[{id:col.id,name:String(values[sheet.headerRows-1]?.[c]||''),value:values[r][c]}])
     // A newly inserted blank row is a draft, not an invented business order.
     if (!old && !FIELDS.slice(1).some(k=>text(f[k])) && !extras.some(e=>text(e.value))) continue
-    const order = old || newOrder(`PARTS-${replacement?book.importId+'-':''}${row.id}`), isNew = !old
+    const order = old || newOrder(row.sapOrigin && row.workbookOrderId || `PARTS-${replacement?book.importId+'-':''}${row.id}`), isNew = !old
     hidden.delete(order.id)
     const has = (...keys)=>keys.some(k=>differences.has(k))
     const set = (field,value,...keys)=>{if(isNew||has(...keys))order[field]=value}
@@ -102,6 +102,7 @@ export function workbookProjection(source, book) {
     order.workbookRowId=row.id; order.workbookRow=r+1; order.workbookExtras=extras
     if(row.sapAnchor){order.sapAnchor=cloneBook(row.sapAnchor);order.sapLineConvention=row.sapLineConvention||'sap'}
     order.sapOrigin=!!row.sapOrigin
+    order.sapPending=isSapPending(row)
     order.isNew=!!row.sapNewRun&&row.sapNewRun===book.sapRefreshRun
     order.importFields=f
     if(isNew||replacement) order.importEvidence=[{file:book.sourceFile,sheet:sheet.name,row:r+1}]

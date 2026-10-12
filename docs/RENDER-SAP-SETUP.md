@@ -1,16 +1,27 @@
 # Render 网页与 Windows SAP 同步部署
 
-网页和 SAP 同步分别部署。Render 发布 Vue 静态网页，浏览器直接读取和保存 Firebase 协作记录；公司内网电脑运行 Python，只读 SAP，再把完整原始快照写入 Firebase。
+网页和 SAP 同步分别部署。Render 发布 Vue 静态网页，浏览器直接读取和保存 Firebase 协作记录；公司内网电脑运行 Python，只读 SAP，再把完整原始快照写入 Firebase。随后 Node 使用与网页相同的比对逻辑更新总表。每日数据更新不需要 git commit、git push 或重新部署网站。
+
+## 每日 17:00 更新
+
+当前日常入口是 `run.bat`：SAP 只读提取 → Firebase 原始快照 → Firebase 总表补充。关闭网页也能完成。Excel 已有行及人工修改不会被 SAP 刷新覆盖；SAP 缺失于总表的记录追加为蓝色待处理，后续导入与人工处理仍按既定状态规则执行。
+
+日常计划使用**目标电脑上的 Windows 任务计划程序**，任务名为 `Regent Supplier SAP to Firebase`，每天电脑当地时间 17:00 执行（悉尼时间请设置 `AUS Eastern Standard Time`）。当前开发电脑上的临时任务已撤销，Codex 定时任务已停用；目标电脑需按下方步骤安装。无需打开 Codex 或网页；目标电脑需开机、保持唤醒、该 Windows 用户已登录（锁屏可以），并可连接公司内网。错过计划时间后会尽快补跑。
+
+成功结果还会记录到 `supplierCollaboration/sync/workbookLastCheck`。本地分别查看 `outputs/firebase-sync/sync.log`（SAP 提取与快照）和 `outputs/firebase-sync/workbook-last-run.log`（总表保存）。总表写入冲突最多重试三次，不重新抓 SAP；更新入口有跨进程锁，避免两次并发提取。
 
 ## 1. 另一台 Windows 电脑：一次性配置
 
-使用同步压缩包或复制项目中的 `run.bat`、`setup-sap-sync.bat`、`scripts` 和本说明，保持目录结构。同步电脑不需要安装 Node 或启动网页。
+同步电脑需要完整项目、Python、Node 22.13 或以上及项目依赖（首次运行 `npm ci`）。不需要启动网页。只想提取原始快照的旧独立入口 `scripts/run-sap-python.ps1` 仍可单独使用。
+
+把完整项目放到目标电脑的固定目录，例如 `C:\SupplierSync`。不要复制本机的 `secrets`、`outputs`、`node_modules`；目标电脑重新安装依赖并保存自己的加密凭据。打开目标电脑的项目目录终端执行 `npm ci`。脚本会根据项目所在目录设置路径，不依赖本机的用户名或目录；安装任务后若移动项目，需更新任务的执行路径。
 
 1. 安装 **64 位 Python 3.11 或以上**，以及公司的 **64 位 SAP HANA Client（HDBODBC 驱动）**。
 2. 确认电脑能连接 SAP 内网 `10.11.2.25:30241`，并能通过 HTTPS 访问 Firebase。
-3. 双击 `setup-sap-sync.bat`。它会检查 Python 的 pyodbc 依赖，缺少时才安装。已保存的地址和加密凭据会自动复用，不再提示输入；只有首次缺少凭据时才要求填写一次。
+3. 双击 `setup-sap-sync.bat`。它会检查 Node 版本、总表模块依赖、Python 版本及 HDBODBC 驱动，并安装缺少的 pyodbc 依赖。首次输入 SAP 只读账号；后续复用本机加密凭据。误复制其他电脑的凭据时，会提示在目标电脑重新输入。Node 和 Python 路径会保存到本机配置，定时任务无需依赖 Codex 的运行环境。
 4. 在此目录打开终端，先执行 `run.bat -DryRun`：读取并验证 SAP，不写 Firebase。成功时输出 `status: dry_run` 和五类表的数量。
 5. 再执行 `run.bat`：读取 SAP，上传并回读验证；`published` 表示新快照成功，`unchanged` 表示本次数据与上次一致。失败退出码为 1，成功为 0。
+6. 确认 `outputs/firebase-sync/workbook-last-run.log` 显示 `status: complete`，再双击 `install-daily-task.bat` 注册每天 17:00 的任务。打开任务计划程序，右键该任务“运行”；等待结束并确认“上次运行结果”为 `0x0`，日志时间更新。这一步必须在目标电脑验证。
 
 本地配置在 `secrets/sap-sync.config.json`，密码在 `secrets/sap.credential.xml`。密码由 Windows 保护，仅供创建它的 Windows 用户在同一电脑解密。换电脑必须重新运行配置入口。主动更换地址或账号时使用 `setup-sap-sync.bat -Reconfigure`；日常只运行 `run.bat`。不要把这些文件放入 Render 或 GitHub。
 
@@ -18,20 +29,20 @@
 
 默认范围沿用已有核对范围：客户端 800、采购公司 3110、工厂 3111、供应商 3060；销售组织 3090、客户 3060。配置文件中的编码保留前导零，其他查询条件在 `scripts/sap-queries`。网页用途分类与这些 SAP 组织编号是不同概念。
 
-## 2. Windows 任务计划程序：每天两次
+## 2. Windows 任务计划程序每天 17:00
 
 在目标电脑创建一个任务，例如 `Regent Supplier SAP to Firebase`，使用执行过配置入口的同一个 Windows 用户。
 
-- 添加两个“每天”触发器，例如 **08:00** 和 **16:00**，按该电脑当地时区执行。
+- 添加一个“每天”触发器 **17:00**，并确认电脑时区为悉尼（AUS Eastern Standard Time，自动跟随夏令时）。
 - 操作 → 启动程序：`C:\Windows\System32\cmd.exe`。
 - 参数（假设解压到 `C:\SupplierSync`）：`/d /c ""C:\SupplierSync\run.bat""`。
 - 起始于：`C:\SupplierSync`，这个字段不要加引号。
 - 设置：任务已运行时“不启动新实例”；错过计划时间后尽快启动；失败后每 5 分钟重试，最多 2 次；运行超过 25 分钟停止。
 - 电脑需开机、保持唤醒并接入公司网络。若选择“不管用户是否登录都运行”，使用该 Windows 用户的密码登录方式，不勾选“不要存储密码”。先点击“运行”，确认最近运行结果为 `0x0`。
 
-也提供可选的注册脚本：在 PowerShell 中执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/register-sap-sync.ps1`，默认每天 08:00 / 16:00。这个快捷方式只在该 Windows 用户已登录时运行。需要无人登录运行时，请在任务计划程序中配置上面的用户登录方式。
+推荐在目标电脑双击 `install-daily-task.bat`；也可执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/register-sap-sync.ps1`，默认每天 17:00。注册前检查 Node 依赖和本机凭据能否解密。操作直接调用隐藏窗口的 PowerShell，执行 `scripts/run-supplier-update.ps1`，与双击 `run.bat` 使用相同更新流程。任务允许使用电池时运行，只在该 Windows 用户已登录时执行。需要无人登录运行时，请在任务计划程序中配置上面的用户登录方式。不要重复启用其他相同更新计划。
 
-**配置入口和 run.bat 都不会自行创建定时任务。** 本次未在开发电脑注册任务。
+**配置入口和 run.bat 都不会自行创建定时任务。** 只有在目标电脑执行注册入口才会创建任务；以后手动更新仍双击 `run.bat`，修改时间或停用则在 Windows 任务计划程序中操作。
 
 ## 3. Firebase 中会更新什么
 
@@ -39,6 +50,8 @@
 - `supplierCollaboration/sap/current`：指向最近成功发布的快照，包含数量和时间。
 - `supplierCollaboration/sync/lastSuccessfulCheck`：最近成功检查时间，包括没有数据变化的检查。
 - `supplierCollaboration/sync/runs/{run}`：新快照发布结果。
+- `supplierCollaboration/workspaces/excel-20260904/partsWorkbook`：追加 SAP 缺失订单后的完整总表，通过版本条件写入。
+- `supplierCollaboration/sync/workbookLastCheck`：总表更新验证结果、快照轮次及 NG／OK／SAP 待处理数量。
 
 只有完整抓取并回读验证成功才切换最新快照；相同数据不重复创建快照；较早运行不能覆盖较新的结果。脚本仅允许经过校验的 SELECT 查询，使用只读 SAP 账号，不提交 SAP 修改，并在结束时回滚、关闭连接。HDBODBC 不支持的只读连接属性不再传入；可选超时属性仅在驱动支持时启用。
 

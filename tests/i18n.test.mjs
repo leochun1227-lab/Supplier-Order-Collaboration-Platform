@@ -617,6 +617,20 @@ test('parts NEW badge sits in the sequence cell and completion editor retains al
   const html=await renderGrid(false)
   assert.match(html,/<td[^>]*data-column="0"[^>]*>[\s\S]*?class="pw-new-badge"/)
   assert.match(html,/NEW/);assert.match(html,/NG · 正在进行/)
+  assert.match(html,/<tr[^>]+class="pw-status-ng"/)
+  row.cells[25]='OK'
+  assert.match(await renderGrid(false),/<tr[^>]+class="pw-status-ok"/)
+  row.cells[25]='澳洲取消订单'
+  assert.doesNotMatch(await renderGrid(false),/class="pw-status-(ng|ok)"/)
+  row.cells[25]='NG'
+  row.sapOrigin=true;row.sapPending=true;row.cells[25]=null
+  const pending=await renderGrid(false)
+  assert.match(pending,/<tr[^>]+class="pw-status-sap"/)
+  assert.match(pending,/SAP 新增待处理/)
+  assert.doesNotMatch(pending,/<tr[^>]+class="pw-status-ng"/)
+  partsWorkbook.setCell(book.sheets[0],row.id,25,'NG')
+  assert.equal(row.sapPending,false)
+  assert.match(await renderGrid(false),/<tr[^>]+class="pw-status-ng"/)
   const editor=await renderGrid(true)
   assert.match(editor,/<option value="NG"[^>]*>NG · 正在进行/)
   assert.match(editor,/<option value="OK"[^>]*>OK · 完成/)
