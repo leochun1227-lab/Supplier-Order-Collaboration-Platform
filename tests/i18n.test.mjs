@@ -652,13 +652,24 @@ test('parts date scope excludes old SAP from rendered rows, status totals, filte
   const closed=structuredClone(current);closed.id='hidden-closed-sap';closed.cells[2]='HIDDEN_CLOSED_PO';closed.sapOpenPo={eligible:false,reason:'no_open_schedule',openQty:0}
   sheet.rows.push(old,current,closed)
   const before=structuredClone(book)
-  const Parts=component('PartsWorkbook.vue','book,loading,matches,completionCounts,openFilter,filterOptions,toggleAllRows,selectedRows,dirty')
+  const Parts=component('PartsWorkbook.vue','book,loading,matches,completionCounts,openFilter,filterOptions,toggleAllRows,selectedRows,dirty,showPendingSap,filters,search,sort,rowPage,pendingFilterActive,clearFilters,filterDraft,applyFilter')
   const html=await renderToString(Vue.createSSRApp({...Parts,setup(props,ctx){return Parts.setup(props,{...ctx,expose(s){
     s.book.value=book;s.loading.value=false
     assert.equal(s.matches.value.length,2);assert.equal(s.completionCounts.value.pending,1);assert.equal(s.completionCounts.value.OK,1)
     s.openFilter(2);assert.ok(!s.filterOptions.value.some(o=>o.value==='HIDDEN_OLD_PO'))
     assert.ok(!s.filterOptions.value.some(o=>o.value==='HIDDEN_CLOSED_PO'))
     s.toggleAllRows();assert.equal(s.selectedRows.value.length,2);assert.ok(!s.selectedRows.value.includes(old.id));assert.equal(s.dirty.value,false)
+    s.openFilter(25)
+    assert.deepEqual(s.filterOptions.value.find(o=>o.value===partsWorkbook.SAP_PENDING_FILTER),{value:partsWorkbook.SAP_PENDING_FILTER,count:1})
+    s.filterDraft.value={query:'',mode:'all',values:[partsWorkbook.SAP_PENDING_FILTER]};s.applyFilter()
+    assert.deepEqual(s.matches.value.map(({row})=>row.id),[current.id])
+    s.search.value='no matching PO';s.filters.value={2:{values:['not present']}};s.sort.value={col:2,direction:-1};s.rowPage.value=5
+    s.showPendingSap()
+    assert.equal(s.search.value,'');assert.equal(s.sort.value,null);assert.equal(s.rowPage.value,1);assert.equal(s.pendingFilterActive.value,true)
+    assert.equal(s.matches.value.length,s.completionCounts.value.pending)
+    assert.deepEqual(s.matches.value.map(({row})=>row.id),[current.id]);assert.equal(s.dirty.value,false)
+    s.clearFilters();assert.equal(s.matches.value.length,2)
+
   }})}}))
   assert.doesNotMatch(html,/data-row-id="hidden-old-sap"/);assert.match(html,/data-row-id="visible-new-sap"/)
   assert.doesNotMatch(html,/data-row-id="hidden-closed-sap"/)

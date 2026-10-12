@@ -1,5 +1,16 @@
 export const cloneBook = value => JSON.parse(JSON.stringify(value))
 export const isSapPending = row => !!row?.sapOrigin && row.sapPending === true
+export const SAP_PENDING_FILTER = 'SAP 新增待处理 / Pending SAP additions'
+// Filter the displayed pending status without changing stored cells or formula results.
+export function workbookFilterValues(sheet, values, completionColumn) {
+  if (!Number.isInteger(completionColumn) || completionColumn < 0) return values
+  return values.map((cells, index) => {
+    if (index < sheet.headerRows || !isSapPending(sheet.rows[index])) return cells
+    const result = [...cells]
+    result[completionColumn] = SAP_PENDING_FILTER
+    return result
+  })
+}
 export const PARTS_FIELDS = ['seq','mode','po','line','van','description_zh','description_en','supplier_reference','material','qty','category','so','buyer','ordered','agreed_etd','planned_etd','manager','eta_china','actual_ship','shipped','remaining','loaded_van','location','container','awb','completion','notes']
 const headerAliases = [
   ['序号No.','序号','No.'],['属性Attribute','属性','Attribute','运输方式'],['订单号Purchase Order','订单号','Purchase Order','PO'],['Line No','行号','订单行','PO Item'],

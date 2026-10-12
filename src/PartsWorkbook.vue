@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, onMounted, onUnmounted, onDeactivated, watch
 import { Table2, Search, Plus, Trash2, Undo2, Redo2, Filter, RefreshCw, CloudCheck, LoaderCircle, ArrowDown, ArrowUp, X, Columns3, Download, Upload, PaintBucket, Check } from 'lucide-vue-next'
 import { Dialog } from 'frappe-ui'
 import { language } from './i18n.mjs'
-import { cloneBook, columnName, sheetValues, setCell, insertRow, deleteRows, insertColumn, deleteColumn, filteredRows, externalFormula, cellFill, setCellFill, setDimension, dimensionLimits, partsHeaderMapping, preparePartsReplacement, isSapPending } from './parts-workbook.mjs'
+import { cloneBook, columnName, sheetValues, setCell, insertRow, deleteRows, insertColumn, deleteColumn, filteredRows, externalFormula, cellFill, setCellFill, setDimension, dimensionLimits, partsHeaderMapping, preparePartsReplacement, isSapPending, workbookFilterValues, SAP_PENDING_FILTER } from './parts-workbook.mjs'
 import { createPartsWorkbookStore } from './parts-workbook-store.mjs'
 import { sapWorkbookDateScope, hiddenSapSupplement } from './parts-workbook-scope.mjs'
 import { createPartsExportWorker, createPartsImportWorker } from './parts-workbook-download.mjs'
@@ -226,8 +226,8 @@ const headerCells = computed(() => (sheet.value?.rows.slice(0,sheet.value.header
 onMounted(readColumnPreferences)
 const values = computed(() => sheet.value ? sheetValues(sheet.value) : [])
 const dateScope = computed(() => sapWorkbookDateScope(book.value, sheet.value, values.value))
-const closedSapCount = computed(() => sheet.value?.rows.slice(sheet.value.headerRows).filter(row => row.sapOrigin && row.sapOpenPo?.eligible === false && !dateScope.value.hidden.has(row.id)).length || 0)
-const matches = computed(() => sheet.value ? filteredRows(sheet.value, values.value, search.value, filters.value, sort.value).filter(({row}) => !hiddenSapSupplement(row,dateScope.value)) : [])
+const filterValues = computed(() => sheet.value ? workbookFilterValues(sheet.value, values.value, completionColumn.value) : [])
+const matches = computed(() => sheet.value ? filteredRows(sheet.value, filterValues.value, search.value, filters.value, sort.value).filter(({row}) => !hiddenSapSupplement(row,dateScope.value)) : [])
 const rowPage=ref(1), rowsPerPage=100
 const rowPageCount=computed(()=>Math.max(1,Math.ceil(matches.value.length/rowsPerPage)))
 const shown=computed(()=>matches.value.slice((rowPage.value-1)*rowsPerPage,rowPage.value*rowsPerPage))
@@ -252,7 +252,7 @@ const filterOptions = computed(() => {
   const counts = new Map()
   for (let r=sheet.value.headerRows;r<sheet.value.rows.length;r++) {
     if (hiddenSapSupplement(sheet.value.rows[r],dateScope.value)) continue
-    const cells=values.value[r]
+    const cells=filterValues.value[r]
     const value = String(cells[filterColumn.value] ?? '')
     counts.set(value, (counts.get(value) || 0) + 1)
   }
@@ -411,6 +411,16 @@ function remove() {
 }
 async function reviewRemote() { try { latestRemote.value = await store.load(); confirmation.value = 'reload'; confirmOpen.value = true } catch (e) { error.value = errorText(e) } }
 async function retry() { if (dirty.value) return save(); if (!book.value) return load(); try { const next = await store.load(); if (!dirty.value && !editing.value) { accept(next); error.value = '' } } catch (e) { error.value = errorText(e) } }
+const pendingFilterActive = computed(() => filters.value[completionColumn.value]?.values?.length === 1 && filters.value[completionColumn.value].values[0] === SAP_PENDING_FILTER)
+function showPendingSap() {
+  if (!commit() || completionColumn.value < 0) return
+  closeFilter(false)
+  clearFilters()
+  sort.value = null
+  filters.value = {[completionColumn.value]:{query:'',mode:'all',values:[SAP_PENDING_FILTER]}}
+  rowPage.value = 1
+  if (tableScroll.value) tableScroll.value.scrollTop = 0
+}
 function clearFilters() { search.value = ''; filters.value = {} }
 async function exportExcel() {
   if(exporting.value||!book.value||!commit())return
@@ -453,14 +463,12 @@ onUnmounted(() => { stopped = true; importRequest++; clearTimeout(importTimeout)
   <section class="parts-workbook" :class="{'pw-resizing-columns':resizing?.axis==='column','pw-resizing-rows':resizing?.axis==='row'}" :aria-label="tx('备品备件表格','Parts workbook')">
     <header class="pw-heading"><slot name="navigation"/><div class="pw-title" :title="book?.sourceFile"><span class="pw-icon"><Table2 :size="23" /></span><div><h1>{{tx('备品备件总表','Parts order workbook')}}</h1><p>{{book?.sourceFile || '2026 Parts order list发澳洲.xlsx'}}</p></div></div><div class="pw-status" :class="{failed:error}" aria-live="polite"><LoaderCircle v-if="loading || saving" :size="17" class="pw-spin"/><CloudCheck v-else :size="17"/><span>{{status}}<small v-if="base?.savedAt">{{new Date(base.savedAt).toLocaleTimeString(language==='en'?'en-AU':'zh-CN')}} · {{tx('版本','Version')}} {{base.revision}}</small></span></div><slot name="header-actions"/></header>
     <div v-if="error" class="pw-error" role="alert"><span>{{error}}</span><button v-if="conflict" @click="reviewRemote">{{tx('查看云端版本','Review cloud version')}}</button><button v-else @click="retry">{{tx('重试','Retry')}}</button></div>
-    <p v-if="closedSapCount" class="pw-footnote">{{tx('另有 '+closedSapCount+' 条 SAP 补充明细不符合未收货订单口径，已隐藏；Excel 原有行不受影响。',closedSapCount+' additional SAP lines do not qualify as open purchase orders and are hidden; original Excel rows are preserved.')}}</p>
-    <p v-if="dateScope.hidden.size" class="pw-footnote">{{dateScope.cutoff?tx('SAP 补充仅显示订单日期晚于 '+dateScope.cutoff+' 的明细（Excel 最早订单日期）；同日、更早或日期不明的 '+dateScope.hidden.size+' 条不显示，原记录保留。','SAP supplements must be dated after '+dateScope.cutoff+' (earliest Excel order date); '+dateScope.hidden.size+' earlier, same-day or undated lines are hidden, with stored records preserved.'):tx('Excel 没有有效订单日期，暂不显示 SAP 补充明细；原记录保留。','No valid Excel order date: SAP supplements are hidden, with stored records preserved.')}}</p>
     <input ref="importInput" type="file" accept=".xlsx" hidden @change="readImportFile"/><p v-if="importNotice" class="pw-export-notice" role="status">{{importNotice}}</p>
     <div v-if="exportError" class="pw-error" role="alert">{{exportError}}</div><p v-if="exportNotice" class="pw-export-notice" role="status">{{exportNotice}}</p>
     <div v-if="!book" class="pw-loading">{{loading ? tx('正在加载完整工作簿…','Loading the complete workbook…') : tx('工作簿加载失败，请重试。','Could not load the workbook. Please retry.')}}</div>
     <template v-else>
       <div class="pw-toolbar"><label class="pw-search"><Search :size="17"/><input v-model="search" :placeholder="tx('搜索当前工作表…','Search this worksheet…')" :aria-label="tx('搜索当前工作表','Search worksheet')"/></label><span class="pw-filter-hint"><Filter :size="16"/>{{filterCount ? tx(filterCount+' 列已筛选',filterCount+' columns filtered') : tx('每列表头均可筛选','Filter any column below')}}</span><button v-if="search || filterCount || sort" @click="clearFilters();sort=null"><X :size="15"/>{{tx('清除','Clear')}}</button><span class="pw-toolbar-divider"/><button class="pw-primary" @click="addRow"><Plus :size="16"/>{{tx('新增行','Add row')}}</button><button @click="openColumns" :class="{selected:hiddenColumnCount>0}"><Columns3 :size="16"/>{{tx('显示/隐藏列','Show/hide columns')}}<b v-if="hiddenColumnCount">{{hiddenColumnCount}}</b></button><button @click="commit() && mutate(s => insertColumn(s))"><Columns3 :size="16"/>{{tx('新增列','Add column')}}</button><button :disabled="!selectedRows.length" @click="askDelete('rows')"><Trash2 :size="16"/>{{tx('删除行','Delete rows')}}<b v-if="selectedRows.length">{{selectedRows.length}}</b></button><button :disabled="!active || sheet.columns.length <= 1" @click="askDelete('column')">{{tx('删除列','Delete column')}}</button><span class="pw-toolbar-divider"/><button :disabled="!activeRow" @click="openColors" :title="tx('为选中的单元格标注颜色','Color the selected cell')"><PaintBucket :size="16"/><i class="pw-current-fill" :style="{background:activeRow?cellFill(sheet,activeRow,active.col)||'#ffffff':'#ffffff'}"/>{{tx('填色','Fill color')}}</button><button :disabled="!undo.length || !!editing" :title="tx('撤销','Undo')" :aria-label="tx('撤销','Undo')" @click="undoChange"><Undo2 :size="17"/></button><button :disabled="!redo.length || !!editing" :title="tx('重做','Redo')" :aria-label="tx('重做','Redo')" @click="redoChange"><Redo2 :size="17"/></button><button :disabled="saving || !dirty || conflict" @click="commit() && save()"><RefreshCw :size="15"/>{{tx('保存','Save')}}</button><button :disabled="saving||importSaving||importParsing||conflict" @click="beginImport"><Upload :size="16"/>{{tx('导入 Excel','Import Excel')}}</button><button v-if="base?.backupBook" :disabled="saving||importSaving||conflict" @click="previewRestore">{{tx('恢复替换前版本','Restore previous version')}}</button><button class="pw-export" :disabled="exporting" @click="exportExcel" :title="tx('按原文件格式导出全部工作表，不受筛选影响','Export all worksheets in the original format, regardless of filters')"><LoaderCircle v-if="exporting" :size="16" class="pw-spin"/><Download v-else :size="16"/>{{exporting?tx('正在导出…','Exporting…'):tx('导出 Excel','Export Excel')}}</button></div>
-      <div v-if="completionColumn>=0" class="pw-status-legend" aria-live="polite"><span class="ng">{{tx('NG 正在进行','NG In progress')}} {{completionCounts.NG}}</span><span class="ok">{{tx('OK 完成','OK Completed')}} {{completionCounts.OK}}</span><span class="sap">{{tx('SAP 新增待处理','Pending SAP additions')}} {{completionCounts.pending}}</span><small>{{tx('蓝色订单保留到人工处理，或被下一次 Excel 收录','Blue orders remain pending until edited or included in a later Excel import')}}</small></div>
+      <div v-if="completionColumn>=0" class="pw-status-legend" aria-live="polite"><span class="ng">{{tx('NG 正在进行','NG In progress')}} {{completionCounts.NG}}</span><span class="ok">{{tx('OK 完成','OK Completed')}} {{completionCounts.OK}}</span><button class="sap" :class="{active:pendingFilterActive}" :aria-pressed="pendingFilterActive" :title="tx('点击查看全部 SAP 新增待处理明细','Show all pending SAP additions')" @click="showPendingSap">{{tx('SAP 新增待处理','Pending SAP additions')}} {{completionCounts.pending}}<Filter :size="12"/></button><small>{{tx('蓝色订单保留到人工处理，或被下一次 Excel 收录','Blue orders remain pending until edited or included in a later Excel import')}}</small></div>
       <div class="pw-formulabar"><span class="pw-address">{{active ? columnName(active.col)+(activeIndex+1) : '—'}}</span><span class="pw-fx">fx</span><button class="pw-formulavalue" :disabled="!activeRow" @click="startEdit(activeRow,active.col)" :title="tx('点击编辑完整内容','Click to edit the full value')">{{formula || displayActive || tx('选择单元格，双击或按 Enter 编辑','Select a cell; double-click or press Enter to edit')}}</button><span v-if="externalFormula(formula)" class="pw-external">{{tx('外部公式 · 原文件缓存值','External formula · cached value')}}</span></div>
       <div class="pw-grid-scroll" ref="tableScroll">
         <table class="pw-grid" :aria-label="sheet.name" :style="{width: 48+visibleColumns.reduce((n,{c})=>n+width(c),0)+'px'}">
@@ -579,9 +587,10 @@ onUnmounted(() => { stopped = true; importRequest++; clearTimeout(importTimeout)
 .pw-grid tbody tr.pw-status-ok{--pw-status-fill:#176b43;--pw-status-border:#3a8660}
 .pw-grid tbody tr.pw-status-sap{--pw-status-fill:#2166a5;--pw-status-border:#538bbe}
 .pw-status-legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;flex-shrink:0;padding:7px 12px;background:#fff;border:1px solid #d6e0e7;border-top:0;font-size:12px}
-.pw-status-legend>span{font-weight:600;display:flex;align-items:center;gap:6px}
-.pw-status-legend>span:before{content:'';width:9px;height:9px;border-radius:2px;background:currentColor}
+.pw-status-legend>span,.pw-status-legend>button{font-weight:600;display:flex;align-items:center;gap:6px}
+.pw-status-legend>span:before,.pw-status-legend>button:before{content:'';width:9px;height:9px;border-radius:2px;background:currentColor}
 .pw-status-legend .ng{color:#c43d46}.pw-status-legend .ok{color:#176b43}.pw-status-legend .sap{color:#2166a5}
+.pw-status-legend>button{font:inherit;font-weight:600;border:1px solid #c3d8eb;border-radius:4px;background:#f3f8fd;padding:3px 7px}.pw-status-legend>button:hover,.pw-status-legend>button.active{background:#e1effc;border-color:#2166a5}.pw-status-legend>button:focus-visible{outline:2px solid #2166a5;outline-offset:2px}
 .pw-status-legend small{font-size:12px;color:#6a8190}
 .pw-grid tbody tr:is(.pw-status-ng,.pw-status-ok,.pw-status-sap)>:is(td,th){background:var(--pw-status-fill)!important;color:#fff;border-color:var(--pw-status-border)}
 .pw-grid tbody tr:is(.pw-status-ng,.pw-status-ok,.pw-status-sap) .focused,.pw-grid tbody tr:is(.pw-status-ng,.pw-status-ok,.pw-status-sap) [data-cell]:focus-visible{outline-color:#ffdf70}
