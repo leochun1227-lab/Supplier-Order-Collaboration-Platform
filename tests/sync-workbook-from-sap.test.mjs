@@ -12,7 +12,7 @@ function fixture({snapshotError=false,conflict=false,run='run1'}={}) {
   }
   const fetcher=async(url,options={})=>{
     calls.push({url,options})
-    if(url.endsWith('/partsWorkbook.json'))return Response.json({schemaVersion:1,revision:2,bookJson:JSON.stringify({sheets:[{id:'s0'}],sapRefreshRun:'run1'})},{headers:{etag:'v2'}})
+    if(url.endsWith('/partsWorkbook.json'))return Response.json({schemaVersion:1,revision:2,bookJson:JSON.stringify({sheets:[{id:'s0'}],sapRefreshRun:'run1',sapLineCorrectionVersion:1})},{headers:{etag:'v2'}})
     if(url.endsWith('/sap/current.json'))return Response.json({run})
     if(url.endsWith('/sync/workbookLastCheck.json')&&options.method==='PUT')return Response.json(JSON.parse(options.body))
     throw new Error('Unexpected network request')

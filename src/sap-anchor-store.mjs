@@ -15,16 +15,17 @@ export function createSapAnchorStore({base,generation,fetcher=fetch}) {
       const link=registry.links[o.id]
       if(!link)continue
       if(link.basis!==before.get(o.id)||!link.anchor?.po||!link.anchor?.item)throw new Error('sap_anchor_source_conflict')
-      if(link.method!=='po_material_quantity'||link.convention&&!['sequence','sap'].includes(link.convention))throw new Error('invalid_sap_anchor_rule')
+      if(!['po_material','po_material_line','po_material_quantity'].includes(link.method)||link.convention&&!['sequence','sap'].includes(link.convention))throw new Error('invalid_sap_anchor_rule')
       const line=Number(workbookIdentity(o).item)
       o.sapAnchor=link.anchor;o.sapLinkMethod=link.method;o.sapLineConvention=link.convention||(line>0&&line*10===Number(link.anchor.item)?'sequence':'sap')
     }
     return async next=>{
       const links={...registry.links};let changed=false
       for(const o of next.orders){
-        if(!o.sapAnchor||o.sapLinkMethod!=='po_material_quantity'||links[o.id])continue
+        if(!o.sapAnchor||!['po_material','po_material_line','po_material_quantity'].includes(o.sapLinkMethod))continue
         if(!/^[a-zA-Z0-9_-]+$/.test(o.id))throw new Error('invalid_sap_anchor_key')
-        links[o.id]={basis:before.get(o.id),anchor:o.sapAnchor,method:o.sapLinkMethod,convention:o.sapLineConvention};changed=true
+        const link={basis:before.get(o.id),anchor:o.sapAnchor,method:o.sapLinkMethod,convention:o.sapLineConvention}
+        if(JSON.stringify(links[o.id])!==JSON.stringify(link)){links[o.id]=link;changed=true}
       }
       if(!changed)return
       if(!current.etag)throw new Error('missing_sap_anchor_etag')

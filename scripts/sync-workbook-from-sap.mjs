@@ -21,7 +21,7 @@ export async function syncWorkbookFromSap({fetcher=fetch,databaseURL=PUBLIC_DATA
       const [saved,response]=await Promise.all([store.load(),fetcher(`${databaseURL}/supplierCollaboration/sap/current.json`,{signal:AbortSignal.timeout(45000)})])
       if(!response.ok)throw new Error('sap_snapshot_unavailable')
       const pointer=await response.json()
-      if(!pointer?.run||saved.book?.sapRefreshRun!==pointer.run)throw new Error('save_conflict')
+      if(!pointer?.run||saved.book?.sapRefreshRun!==pointer.run||saved.book?.sapLineCorrectionVersion!==1)throw new Error('save_conflict')
       const result={status:'complete',checkedAt:Date.now(),workspace,sapRun:pointer.run,workbookRevision:saved.revision,
         records:packet.summary.masterRecords,completion:packet.summary.masterCompletion,
         purposeCounts:packet.state.orders.reduce((counts,o)=>{counts[o.type||'用途待确认']=(counts[o.type||'用途待确认']||0)+1;return counts},{}),

@@ -25,28 +25,36 @@ export function applySapSnapshotReferences(data,rows,finishedAt) {
   const byPo=new Map(),byLine=new Map()
   for(const p of rows){const po=normalizedIdentity(p.EBELN),key=po+'/'+normalizedIdentity(p.EBELP);if(byLine.has(key))throw new Error('duplicate_sap_reference');byLine.set(key,p);if(!byPo.has(po))byPo.set(po,[]);byPo.get(po).push(p)}
   for(const o of data.orders.filter(o=>o.imported)) {
-    const source=workbookIdentity(o),material=text(o.importFields?.material??o.part),qty=o.importFields?.qty??o.qty
+    const source=workbookIdentity(o),material=identityValue(o.importFields?.material??o.soPart??o.part),qty=o.importFields?.qty??o.qty
     const po=normalizedIdentity(source.po),line=normalizedIdentity(source.item),candidates=byPo.get(po)||[]
     const sameMaterial=candidates.filter(p=>text(p.MATNR)===material)
     const matching=material?sameMaterial.filter(p=>typeof qty==='number'&&Number.isFinite(qty)&&p.MENGE===qty):[]
-    // Preserve a proven source anchor across snapshots. Workbook edits are applied
-    // afterwards, so changing a PO/material never silently relinks it to another row.
+    // Keep a proven PO identity, but repair its line by material. An old/wrong
+    // line must never override a unique PO + material match.
     const anchor=o.sapAnchor??(o.sapPo&&o.sapItem?{po:o.sapPo,item:o.sapItem}:null)
-    let selected=anchor?byLine.get(normalizedIdentity(anchor.po)+'/'+normalizedIdentity(anchor.item)):byLine.get(po+'/'+line)
-    let method=anchor?(o.sapLinkMethod||'sap_po_line'):'sap_po_line'
-    if(!anchor&&!selected&&matching.length===1){selected=matching[0];method='po_material_quantity'}
-    const reason=anchor&&!selected?'snapshot_line_missing':!/^\d+$/.test(po)?'po_missing':!candidates.length?'po_not_in_scope':!material?'material_missing':matching.length>1?'ambiguous':!sameMaterial.length?'material_not_in_po':'line_or_quantity'
-    o.sapAnchor=anchor||(selected?{po:text(selected.EBELN),item:text(selected.EBELP)}:null)
+    const anchored=anchor&&byLine.get(normalizedIdentity(anchor.po)+'/'+normalizedIdentity(anchor.item))
+    const poChanged=!!anchor&&normalizedIdentity(anchor.po)!==po
+    const exact=byLine.get(po+'/'+line)
+    let selected,method=''
+    if(poChanged){selected=anchored;method=o.sapLinkMethod||'sap_po_line'}
+    else if(material&&sameMaterial.length===1){selected=sameMaterial[0];method='po_material'}
+    else if(material&&sameMaterial.length>1){
+      if(sameMaterial.includes(exact)){selected=exact;method='po_material_line'}
+      else if(sameMaterial.includes(anchored)){selected=anchored;method='po_material_line'}
+      else if(matching.length===1){selected=matching[0];method='po_material_quantity'}
+    } else if(material){selected=exact||(line?anchored:undefined);method='sap_po_line'}
+    const reason=poChanged&&!selected?'snapshot_line_missing':!/^\d+$/.test(po)?'po_missing':!candidates.length?'po_not_in_scope':!material?'material_missing':!sameMaterial.length?'material_not_in_po':'ambiguous'
+    o.sapAnchor=selected?{po:text(selected.EBELN),item:text(selected.EBELP)}:anchor
     o.sapReferenceStatus=selected?'matched':'unmatched';o.sapReferenceReason=selected?'':reason
     o.sapReferenceSource='snapshot';o.sapReferenceRefreshError=false;o.sapAsOf=new Date(finishedAt).toISOString().slice(0,10)
-    o.sapPo=text(selected?.EBELN);o.sapItem=text(selected?.EBELP);o.sapPart=text(selected?.MATNR);o.sapUnit=text(selected?.MEINS)
+    o.sapPo=text(selected?.EBELN)||(!poChanged&&candidates.length?text(candidates[0].EBELN):'');o.sapItem=text(selected?.EBELP);o.sapPart=text(selected?.MATNR);o.sapUnit=text(selected?.MEINS)
+    o.sapMaterialNotInPo=!poChanged&&candidates.length>0&&(!material||sameMaterial.length===0)
+    o.sapLineTarget=!poChanged&&selected&&material&&text(selected.MATNR)===material?text(selected.EBELP):''
     o.sapQuantity=selected?.MENGE??null
     o.sapPurchasingGroup=text(selected?.EKGRP)
-    o.sapLinkMethod=selected?method:'';o.sapCandidateCount=matching.length
+    o.sapLinkMethod=selected?method:'';o.sapCandidateCount=sameMaterial.length
     o.sapLinkBasis={...source,material,qty}
-    // Once the source numbering convention has been established for this anchor,
-    // later material/quantity changes are their own differences, not new line mismatches.
-    o.sapLineConvention=anchor&&o.sapLineConvention?o.sapLineConvention:selected&&matching.length===1&&matching[0]===selected&&/^\d+$/.test(line)&&Number(line)>0&&Number(line)*10===Number(selected.EBELP)&&!byLine.has(po+'/'+line)?'sequence':'sap'
+    o.sapLineConvention='sap'
     // Only carry forward already-established quantity comparability. New identity
     // links alone do not authorize unit conversions or quantity aggregation.
     o.sapQuantityBasisComparable??=!!o.quantityComparable

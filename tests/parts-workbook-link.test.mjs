@@ -26,19 +26,21 @@ test('unchanged workbook preserves previously saved collaboration values',()=>{
   assert.equal(next.shipments.length,2)
 })
 test('material edit follows immutable row identity after insertion; duplicates do not cross-update; SAP preserved',()=>{
-  const input=cloneBook(workbook), original=JSON.stringify(fixture)
+  const input=cloneBook(workbook),withSap=cloneBook(fixture)
+  withSap.orders[0].sapPart='SAP-MATERIAL'
+  const original=JSON.stringify(withSap)
   insertRow(input.sheets[0],3)
   setCell(input.sheets[0],'s0-r4',8,'NEW-MATERIAL')
   setCell(input.sheets[0],'s0-r4',2,'NEW-PO')
-  const {state}=sharedWorkbookState(fixture,{},input)
+  const {state}=sharedWorkbookState(withSap,{},input)
   assert.equal(state.orders.length,2)
   const order=state.orders.find(o=>o.id==='master-0')
   assert.equal(order.part,'NEW-MATERIAL');assert.equal(order.soPart,'NEW-MATERIAL');assert.equal(order.po,'NEW-PO')
-  assert.equal(order.sapPart,fixture.orders[0].sapPart)
+  assert.equal(order.sapPart,withSap.orders[0].sapPart)
   assert.equal(state.orders[1].part,fixture.orders[1].part)
   assert.ok(state.shipments.some(s=>s.order===order.id))
   assert.ok(detectChecks(state.orders,state.shipments).some(c=>c.order===order.id&&c.kind==='material'))
-  assert.equal(JSON.stringify(fixture),original)
+  assert.equal(JSON.stringify(withSap),original)
 })
 test('quantities, formula results, dates, status and container flow to shared records',()=>{
   const input=cloneBook(workbook),sheet=input.sheets[0]

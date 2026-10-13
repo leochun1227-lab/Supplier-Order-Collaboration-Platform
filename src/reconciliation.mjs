@@ -1,5 +1,5 @@
 import { TODAY, seedOrders, seedShipments, daysLate, openQty } from './domain.mjs'
-import { identityValue, normalizedIdentity, workbookIdentity, sapLineMatches } from './sap-reference.mjs'
+import { identityValue, normalizedIdentity, workbookIdentity } from './sap-reference.mjs'
 export { workbookIdentity } from './sap-reference.mjs'
 export const label=(zh,en)=>({zh,en})
 export const isHistoricalOrder=o=>!!o?.imported&&(!!o.cancelled||String(o.importCompletion).toUpperCase()==='OK'||o.qtyKnown!==false&&openQty(o)<=0)
@@ -9,7 +9,7 @@ export const KINDS={
   po_line:label('SAP 与总表订单行不一致','SAP / workbook line mismatch'),
   po_line_missing:label('总表订单行缺失','Workbook order line missing'),
   sap_reference:label('SAP 参考记录待关联','SAP reference requires linking'),
-  shared_reference:label('Excel 同一 PO、物料的行号重复','Duplicate Excel line for the same PO and material'),
+  shared_reference:label('Excel 记录重复待核对','Duplicate workbook records require review'),
   source_link:label('补充表记录待关联','Supplement row requires linking'),
   unit:label('SAP 计量单位变化待核对','SAP unit change requires review'),
   initialization:label('初始化记录待核对','Initialization review'),
@@ -96,29 +96,30 @@ export function detectChecks(orders,shipments,today=TODAY){
   for(const o of orders){
     if(o.imported){
       const business=workbookIdentity(o)
-      if(identityValue(o.sapPo)&&identityValue(o.sapItem)) {
-        for(const [kind,key,sap]of [['po','po',o.sapPo],['po_line','item',o.sapItem]]) {
-          if(kind==='po_line'&&sapLineMatches(o))continue
-          if(kind==='po_line'&&!identityValue(business.item)) {
-            add(o,'po_line_missing',label(`总表 Line No 未填写（原值：${business.item||'空白'}）；SAP 订单行：${sap}。这不是 PO 或料号不一致。`,`Workbook Line No is missing (original: ${business.item||'blank'}); SAP order line: ${sap}. This is not a PO or material mismatch.`))
-            continue
-          }
-          if(normalizedIdentity(sap)!==normalizedIdentity(business[key]))add(o,kind,`SAP: ${sap} ↔ Excel: ${business[key]||'—'}`,'高')
-        }
-      } else {
+      const materialUnmatched=o.sapMaterialNotInPo||o.sapReferenceReason==='material_not_in_po'
+      if(identityValue(o.sapPo)&&normalizedIdentity(o.sapPo)!==normalizedIdentity(business.po))add(o,'po',`SAP: ${o.sapPo} ↔ Excel: ${business.po||'—'}`,'高')
+      if(!identityValue(o.sapItem)&&!materialUnmatched) {
         const unavailable=o.sapReferenceStatus!=='unmatched'
         add(o,'sap_reference',label(
           `${unavailable?'SAP 参考数据未能读取，请刷新重试':'当前导入参考中未建立唯一 SAP 关联，需核实来源'}；Excel PO: ${business.po||'—'} / 行: ${business.item||'—'}`,
           `${unavailable?'SAP reference unavailable; reload to retry':'No unique SAP link in the imported reference; verify the source'}; Excel PO: ${business.po||'—'} / line: ${business.item||'—'}`))
-        const reasons={po_missing:label('总表缺少正式 PO','Workbook has no formal PO'),po_not_in_scope:label('当前 SAP 查询范围内未找到 PO','PO not found in the current SAP scope'),material_missing:label('总表料号缺失，不能据此关联','Workbook material is missing; cannot infer a link'),ambiguous:label('同 PO、料号、数量有多个候选行','Multiple rows share this PO, material and quantity'),material_not_in_po:label('PO 存在，但该料号未找到','PO exists; material not found'),line_or_quantity:label('订单行或数量需核对','Order line or quantity needs review'),snapshot_line_missing:label('原 SAP 关联行不在当前快照内','Original SAP anchor is absent from this snapshot')}
+        const reasons={po_missing:label('总表缺少正式 PO','Workbook has no formal PO'),po_not_in_scope:label('当前 SAP 查询范围内未找到 PO','PO not found in the current SAP scope'),material_missing:label('总表料号缺失，不能据此关联','Workbook material is missing; cannot infer a link'),ambiguous:label('PO、物料匹配到多条 SAP 记录，需确认对应记录','PO and material match multiple SAP records; confirm the corresponding record'),line_or_quantity:label('SAP 对应记录待确认','SAP record requires confirmation'),snapshot_line_missing:label('原 SAP 关联记录不在当前快照内','Original SAP anchor is absent from this snapshot')}
         if(reasons[o.sapReferenceReason])found.at(-1).detail=label(`${reasons[o.sapReferenceReason].zh}；Excel PO: ${business.po||'—'} / 行: ${business.item||'—'}`,`${reasons[o.sapReferenceReason].en}; Excel PO: ${business.po||'—'} / line: ${business.item||'—'}`)
         found.at(-1).fingerprint=JSON.stringify(['sap_reference',found.at(-1).detail])
       }
-      if(o.sapPart&&o.sapPart!==o.soPart||(o.workbookMaterialChanged&&!mappingReady(o)))add(o,'material',`${o.sapPart||'—'} / ${o.unit} ↔ ${o.soPart||'—'} / ${o.soUnit}`,'高')
+      if(materialUnmatched){
+        const material=identityValue(o.importFields?.material??o.soPart??o.part)||'—',line=identityValue(business.item)
+        add(o,'material',label(
+          o.sapPart&&line?`Excel 行号 ${business.item}／物料 ${material}；SAP 行号 ${o.sapItem}／物料 ${o.sapPart}，双方物料不一致。`:
+            `SAP PO ${o.sapPo||business.po} 下没有与 Excel 物料 ${material} 匹配的物料${line?`；Excel 行号 ${business.item}`:'（Excel 未填写行号）'}。`,
+          o.sapPart&&line?`Excel line ${business.item} / material ${material}; SAP line ${o.sapItem} / material ${o.sapPart}: materials differ.`:
+            `No material in SAP PO ${o.sapPo||business.po} matches Excel material ${material}${line?`; Excel line ${business.item}`:' (Excel line is blank)'}.`),'高')
+        found.at(-1).title=label('SAP 与总表物料号不一致','SAP / workbook material mismatch')
+      }else if(identityValue(o.sapPart)&&identityValue(o.sapPart)!==identityValue(o.importFields?.material??o.soPart??o.part))add(o,'material',`${o.sapPart} / ${o.unit} ↔ ${o.importFields?.material??o.soPart??o.part??'—'} / ${o.soUnit}`,'高')
       const duplicateCount=workbookLineCounts.get(workbookLineKeys.get(o))||0
       if(duplicateCount>1){
         const material=identityValue(o.importFields?.material??o.soPart??o.part)
-        add(o,'shared_reference',label(`Excel 中 ${duplicateCount} 条记录的 PO ${business.po}、物料 ${material}、行号 ${business.item} 相同；同一 PO、同一物料下行号重复，请核对。`,`Excel has ${duplicateCount} records with the same PO ${business.po}, material ${material} and line ${business.item}; review the duplicate line numbers.`),'高')
+        add(o,'shared_reference',label(`Excel 中 ${duplicateCount} 条记录的 PO ${business.po}、物料 ${material}、行号 ${business.item} 相同；请核对是否为重复记录或拆分发运。`,`Excel has ${duplicateCount} records with the same PO ${business.po}, material ${material} and line ${business.item}; check for duplicate records or split dispatches.`),'高')
       }
       if(o.sapUnit&&o.unit&&o.unit!=='?'&&o.sapUnit!==o.unit)add(o,'unit',`SAP: ${o.sapUnit} ↔ Excel: ${o.unit}`)
       if(o.sapSharedLineCount===1&&o.qtyKnown!==false&&Number.isFinite(o.sapQuantity)&&Number.isFinite(o.qty)&&o.sapUnit&&o.sapUnit===o.unit&&o.unit!=='?'&&o.sapPart===o.soPart&&o.sapQuantity!==o.qty)add(o,'quantity',`SAP: ${o.sapQuantity} ${o.sapUnit} ↔ Excel: ${o.qty} ${o.unit}`)
@@ -154,8 +155,8 @@ export function reconcile(orders,shipments,previous=[],today=TODAY){
   return [...current,...previous.filter(c=>!ids.has(c.id)).map(c=>{
     const o=byOrder.get(c.order)
     // Missing reference data is not evidence that a previously found PO mismatch passed.
-    if(['po','po_line','po_line_missing'].includes(c.kind)&&o&&(!identityValue(o.sapPo)||!identityValue(o.sapItem)))return {...c}
-    if(c.kind==='po_line'&&o&&!identityValue(workbookIdentity(o).item))return {...c,status:'已解决',closure:label('已重新归类为总表订单行缺失，请查看对应待补充事项','Reclassified as a missing workbook order line; see the corresponding open task')}
+    if(c.kind==='po'&&o&&(!identityValue(o.sapPo)||!identityValue(o.sapItem)))return {...c}
+    if(['po_line','po_line_missing'].includes(c.kind))return {...c,status:'已解决',closure:label('已改按 PO＋物料核对，行号不再单列异常；原处理记录保留','Reclassified under PO and material reconciliation; line numbers are no longer separate exceptions. Review history retained.')}
     return {...c,status:'已解决',closure:label('当前事实已通过规则核对','Current facts pass the rule')}
   })]
 }

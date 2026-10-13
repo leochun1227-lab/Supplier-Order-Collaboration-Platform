@@ -79,11 +79,44 @@ export function retainSapWorkbookRows(replacement, previous) {
   return next
 }
 
-// SAP supplies reference facts. Existing China workbook cells, formulas, status,
-// notes and formatting are never rewritten by a refresh.
+// The only authorized source-cell correction is Line No, proven by PO/material.
+// Keep its previous value/formula in row metadata, never in the user's notes.
+export function correctSapWorkbookLines(book, orders, run) {
+  const sheet=mainSheet(book)
+  if(!sheet)return book
+  const columns=fieldPositions(book,sheet),column=columns.line
+  if(column<0)return book
+  const values=sheetValues(sheet),byRow=new Map(orders.map(o=>[o.workbookRowId,o])),changes=[]
+  for(let r=sheet.headerRows;r<sheet.rows.length;r++){
+    const row=sheet.rows[r],order=byRow.get(row.id),target=order?.sapLineTarget
+    if(!target||order.sapReferenceRefreshError)continue
+    const correctLine=normalizedIdentity(values[r][column])!==normalizedIdentity(target)
+    const correctAnchor=JSON.stringify(row.sapAnchor)!==JSON.stringify(order.sapAnchor)
+    if(correctLine||correctAnchor)changes.push({r,target,order,correctLine})
+  }
+  if(!changes.length&&book.sapLineCorrectionVersion===1)return book
+  const next=cloneBook(book),targetSheet=mainSheet(next)
+  for(const {r,target,order,correctLine} of changes){
+    const row=targetSheet.rows[r]
+    if(correctLine){
+      row.sapLineCorrections=[...(row.sapLineCorrections||[]),{from:row.cells[column]??null,
+        formula:row.formulas?.[column]??null,type:row.types?.[column]??null,to:target,
+        po:order.sapPo,material:order.sapPart,method:order.sapLinkMethod,run}]
+      row.cells[column]=target
+      if(row.formulas)delete row.formulas[column]
+      if(row.types)delete row.types[column]
+    }
+    row.sapAnchor=cloneBook(order.sapAnchor);row.sapLineConvention='sap'
+  }
+  next.sapLineCorrectionVersion=1
+  return next
+}
+
+// SAP supplies reference facts and the authorized Line No correction only.
 export function mergeSapWorkbook(book, orders, rows, run) {
   if (!book || !run) return book
   book = migrateSapPending(book, rows)
+  book = correctSapWorkbookLines(book, orders, run)
   const scope = sapWorkbookDateScope(book)
   if (book.sapRefreshRun === run && book.sapDateScopeVersion === 2 && book.sapOpenPoVersion === 1 && book.sapDateCutoff === scope.cutoff) return book
   const next = cloneBook(book), sheet = next.sheets.find(s => s.id === (next.mainSheetId || 's0'))
@@ -95,7 +128,7 @@ export function mergeSapWorkbook(book, orders, rows, run) {
   const sapByLine = new Map(rows.map(sap => [lineKey(sap.EBELN,sap.EBELP),sap]))
   for (const row of sheet.rows.slice(sheet.headerRows)) {
     const order = byRow.get(row.id)
-    const anchor = row.sapAnchor || order?.sapAnchor
+    const anchor = order?.sapAnchor || row.sapAnchor
     if (row.sapOrigin) row.sapOpenPo = openPoFacts(sapByLine.get(lineKey(anchor?.po ?? row.cells[columns.po],anchor?.item ?? row.cells[columns.line])))
     if (anchor) {
       represented.add(lineKey(anchor.po, anchor.item))
@@ -109,7 +142,7 @@ export function mergeSapWorkbook(book, orders, rows, run) {
   // every possible SAP candidate as a supposedly new order.
   for (const order of orders.filter(o => o.sapReferenceReason === 'ambiguous')) {
     for (const sap of rows) if (normalizedIdentity(sap.EBELN) === normalizedIdentity(order.po) &&
-      String(sap.MATNR) === String(order.part) && sap.MENGE === order.qty) represented.add(lineKey(sap.EBELN, sap.EBELP))
+      String(sap.MATNR).trim() === String(order.importFields?.material??order.part).trim()) represented.add(lineKey(sap.EBELN, sap.EBELP))
   }
   const existingIds = new Set(sheet.rows.map(row => row.id))
   let sequence = Math.max(0, ...sheet.rows.slice(sheet.headerRows).map(r => Number(r.cells[columns.seq]) || 0))

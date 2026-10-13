@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PARTS_FIELDS, setCell } from '../src/parts-workbook.mjs'
-import { mergeSapWorkbook, retainSapWorkbookRows, migrateSapPending } from '../src/sap-workbook-sync.mjs'
+import { mergeSapWorkbook, retainSapWorkbookRows, migrateSapPending, correctSapWorkbookLines } from '../src/sap-workbook-sync.mjs'
 import { sharedWorkbookState } from '../src/parts-workbook-link.mjs'
 import { applySapSnapshotReferences } from '../src/sap-reference.mjs'
 import { reconcile, isException, isHistoricalOrder, resolveFact } from '../src/reconciliation.mjs'
@@ -16,6 +16,41 @@ const workbook=()=>({sourceFile:'China.xlsx',sheets:[{id:'s0',name:'Sheet1',head
     formulas:{},types:{},fills:{'s0-c25':'#E2F0D9'}}))]}]})
 const source={orders:[],shipments:[],issues:[]}
 function linked(book,rows){const state=sharedWorkbookState(source,{},book).state;applySapSnapshotReferences(state,rows,1800000000000);return state.orders}
+
+test('line correction updates only mismatched Line No and retains source formula, status, notes and row identity',()=>{
+  const book=workbook(),row=book.sheets[0].rows[1]
+  row.cells[3]=1;row.formulas[3]='=1';row.formulas[9]='=2+3'
+  row.importKey='stable-source-key';row.comments=[{text:'Keep follow-up'}]
+  const before=structuredClone(book),rows=[sap(),sap('4500000002')]
+  const next=mergeSapWorkbook(book,linked(book,rows),rows,'run1'),updated=next.sheets[0].rows[1]
+  assert.deepEqual(book,before)
+  assert.equal(updated.cells[3],'00010');assert.equal(updated.formulas[3],undefined)
+  assert.equal(updated.formulas[9],'=2+3');assert.equal(updated.cells[25],'OK')
+  assert.equal(updated.importKey,row.importKey);assert.equal(updated.id,row.id)
+  assert.deepEqual(updated.comments,row.comments);assert.deepEqual(updated.fills,row.fills)
+  assert.deepEqual(updated.cells.filter((_,i)=>i!==3),row.cells.filter((_,i)=>i!==3))
+  assert.equal(updated.sapLineCorrections[0].from,1);assert.equal(updated.sapLineCorrections[0].formula,'=1')
+  assert.equal(next.sheets[0].rows[2].cells[3],10,'equivalent leading-zero format is preserved')
+  assert.equal(mergeSapWorkbook(next,linked(next,rows),rows,'run1'),next)
+  updated.cells[3]='/'
+  const repaired=mergeSapWorkbook(next,linked(next,rows),rows,'run1')
+  assert.equal(repaired.sheets[0].rows[1].cells[3],'00010','edits are corrected even without a new SAP pointer')
+  assert.equal(repaired.sheets[0].rows[1].sapLineCorrections.length,2)
+})
+
+test('unmatched materials and ambiguous SAP records never alter workbook lines or fabricate correction history',()=>{
+  for(const line of ['/',1,10]){
+    const book=workbook(),row=book.sheets[0].rows[1];row.cells[3]=line;row.cells[8]='WRONG'
+    const rows=[sap()],next=correctSapWorkbookLines(book,linked(book,rows),'run1')
+    assert.equal(next.sheets[0].rows[1].cells[3],line)
+    assert.equal(next.sheets[0].rows[1].sapLineCorrections,undefined)
+  }
+  const book=workbook();book.sheets[0].rows[1].cells[3]='/'
+  const rows=[sap(),sap('4500000001',{EBELP:'00020'})]
+  const next=correctSapWorkbookLines(book,linked(book,rows),'run1')
+  assert.equal(next.sheets[0].rows[1].cells[3],'/')
+  assert.equal(next.sheets[0].rows[1].sapLineCorrections,undefined)
+})
 
 test('SAP adds missing orders once, leaves China cells intact and marks only the latest successful snapshot additions',()=>{
   const book=workbook(),before=structuredClone(book),rows=[sap(),sap('4500000002'),sap('4500000003')]
@@ -145,7 +180,8 @@ test('latest China replacement is the baseline and ambiguous SAP candidates do n
 })
 
 test('workspace refresh compares the latest workbook with SAP and saves append-only changes using a conditional write',async()=>{
-  let stored={schemaVersion:1,revision:1,bookJson:JSON.stringify(workbook())},writes=0,state,summary,errors=[]
+  const initial=workbook();initial.sheets[0].rows[1].cells[3]='/'
+  let stored={schemaVersion:1,revision:1,bookJson:JSON.stringify(initial)},writes=0,state,summary,errors=[]
   const rows=[sap(),sap('4500000002'),sap('4500000003')]
   const pointer={run:'1800000000000-1234567890abcdef1234567890abcdef',finishedAt:1800000000000,hash:'hash',counts:{po:3}}
   const fetcher=async(url,options={})=>{
@@ -171,13 +207,19 @@ test('workspace refresh compares the latest workbook with SAP and saves append-o
     assert.equal(summary.masterCompletion.NG,0)
     assert.equal(summary.masterCompletion.SAP,1)
     assert.equal(state.orders[0].importCompletion,'OK');assert.equal(state.orders[1].cancelled,true)
+    assert.equal(state.orders[0].importFields.line,'00010')
+    assert.equal(JSON.parse(stored.bookJson).sheets[0].rows[1].sapLineCorrections[0].from,'/')
     await cloud.refresh();assert.equal(writes,1,'polling an unchanged pointer never writes or re-adds rows')
+    const edited=JSON.parse(stored.bookJson);edited.sheets[0].rows[1].cells[3]=99
+    stored={...stored,revision:stored.revision+1,bookJson:JSON.stringify(edited)}
+    await cloud.refresh();assert.equal(writes,2);assert.equal(state.orders[0].importFields.line,'00010')
+    assert.equal(JSON.parse(stored.bookJson).sheets[0].rows[1].sapLineCorrections.length,2)
     const latest=JSON.parse(stored.bookJson);latest.importId='replacement';delete latest.sapRefreshRun
     latest.sheets[0].fieldColumns=Object.fromEntries(PARTS_FIELDS.map((f,i)=>[f,`s0-c${i}`]))
     latest.sheets[0].rows=latest.sheets[0].rows.filter(r=>r.id!=='row0')
     stored={...stored,revision:stored.revision+1,bookJson:JSON.stringify(latest)}
     await cloud.refresh()
-    assert.equal(writes,2);assert.equal(state.orders.length,3)
+    assert.equal(writes,3);assert.equal(state.orders.length,3)
     assert.equal(state.orders.find(o=>o.po==='4500000001').isNew,true,'compares unchanged SAP against a later China import')
   }finally{await cloud.disconnect()}
 })

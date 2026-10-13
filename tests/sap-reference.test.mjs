@@ -20,40 +20,44 @@ const unlinked=()=>({...order(),sapPo:'',sapItem:'',sapReferenceStatus:'unmatche
 const sapRow=(line='00010',extra={})=>({EBELN:'4900000001',EBELP:line,MATNR:'MAT1',MENGE:5,MEINS:'EA',NETPR:12,PEINH:1,WAERS:'AUD',...extra})
 const apply=(o,rows=[sapRow()])=>{applySapSnapshotReferences({orders:[o]},rows,1789104255050);return o}
 
-test('unique PO, material and quantity links sequential Excel numbering without rewriting source values',()=>{
+test('unique PO and material supplies a line correction without rewriting source values during reference loading',()=>{
   const o=apply(unlinked())
   assert.equal(o.sapItem,'00010');assert.equal(o.importFields.line,1)
-  assert.equal(o.sapLinkMethod,'po_material_quantity');assert.equal(o.sapLineConvention,'sequence')
-  assert.equal(sapLineMatches(o),true);assert.deepEqual(referenceKinds([o]),[])
+  assert.equal(o.sapLinkMethod,'po_material');assert.equal(o.sapLineConvention,'sap')
+  assert.equal(o.sapLineTarget,'00010');assert.deepEqual(referenceKinds([o]),[])
   assert.equal(o.quantityComparable,false,'identity association does not authorize quantity conversion')
   for(const patch of [{po:'4900000002'},{line:2},{qty:6},{material:'OTHER'}]){
     const edited=structuredClone(o);Object.assign(edited.importFields,patch)
     if(patch.qty)edited.qty=patch.qty
     if(patch.material)edited.soPart=patch.material
-    assert.equal(sapLineMatches(edited),!patch.line,'only a changed line invalidates an established numbering convention')
+    apply(edited)
+    assert.ok(!detectChecks([edited],[]).some(c=>['po_line','po_line_missing'].includes(c.kind)))
+    assert.equal(edited.sapLineTarget,patch.po||patch.material?'':'00010')
   }
 })
 
-test('exact SAP line takes precedence; ambiguous matches stay unlinked; real numbering differences stay visible',()=>{
+test('PO and material take precedence over a wrong exact line; ambiguous matches never guess',()=>{
   const direct=apply(unlinked(),[sapRow('00001',{MATNR:'OTHER'}),sapRow()])
-  assert.equal(direct.sapItem,'00001');assert.equal(direct.sapPart,'OTHER');assert.equal(direct.sapLineConvention,'sap')
-  assert.ok(detectChecks([direct],[]).some(c=>c.kind==='material'))
+  assert.equal(direct.sapItem,'00010');assert.equal(direct.sapPart,'MAT1');assert.equal(direct.sapLineTarget,'00010')
+  assert.ok(!detectChecks([direct],[]).some(c=>c.kind==='material'))
   const ambiguous=apply(unlinked(),[sapRow(),sapRow('00020')])
   assert.equal(ambiguous.sapReferenceStatus,'unmatched');assert.equal(ambiguous.sapReferenceReason,'ambiguous')
   assert.equal(ambiguous.sapItem,'')
   const mismatch=apply(unlinked(),[sapRow('00030')])
   assert.equal(mismatch.sapReferenceStatus,'matched');assert.equal(mismatch.sapLineConvention,'sap')
-  assert.deepEqual(referenceKinds([mismatch]).map(c=>c.kind),['po_line'])
+  assert.deepEqual(referenceKinds([mismatch]),[])
+  assert.equal(mismatch.sapLineTarget,'00030')
 })
 
-test('snapshot refresh preserves the proven SAP anchor, collaboration and genuine changed SAP material',()=>{
+test('snapshot refresh repairs a stale line within its PO and preserves collaboration and genuine material differences',()=>{
   const o=apply(unlinked());o.eta='2026-10-01';o.comments=[{text:'Keep me'}]
   apply(o,[sapRow('00010',{MATNR:'NEW'}),sapRow('00020')])
-  assert.equal(o.sapItem,'00010');assert.equal(o.sapPart,'NEW');assert.equal(o.eta,'2026-10-01')
-  assert.equal(sapLineMatches(o),true,'a SAP material change must not invent a line mismatch')
-  assert.deepEqual(o.comments,[{text:'Keep me'}]);assert.ok(detectChecks([o],[]).some(c=>c.kind==='material'))
-  apply(o,[sapRow('00020')])
-  assert.equal(o.sapReferenceReason,'snapshot_line_missing');assert.equal(o.sapItem,'')
+  assert.equal(o.sapItem,'00020');assert.equal(o.sapPart,'MAT1');assert.equal(o.eta,'2026-10-01')
+  assert.equal(o.sapLineTarget,'00020')
+  assert.deepEqual(o.comments,[{text:'Keep me'}]);assert.ok(!detectChecks([o],[]).some(c=>c.kind==='material'))
+  apply(o,[sapRow('00020',{MATNR:'NEW'})])
+  assert.equal(o.sapMaterialNotInPo,true);assert.equal(o.sapLineTarget,'')
+  assert.ok(detectChecks([o],[]).some(c=>c.kind==='material'))
   apply(o,[sapRow()]);assert.equal(o.sapItem,'00010')
 })
 
@@ -69,6 +73,51 @@ test('latest snapshot validates complete count, hash and unique rows atomically;
   records={a:sapRow()};pointer.counts.po=1
   const run=await refreshSapSnapshot(data,{fetcher});assert.equal(data.orders[0].sapItem,'00010')
   reads=[];assert.equal(await refreshSapSnapshot(data,{fetcher,previousRun:run}),run);assert.equal(reads.length,1)
+})
+
+test('PO-only matches become material exceptions and retain known lines without inventing a SAP material',()=>{
+  for(const line of ['/',null,10,99]){
+    const o=unlinked();o.importFields.line=line;o.importFields.material='WRONG';o.soPart='WRONG'
+    apply(o,[sapRow(),sapRow('00020',{MATNR:'OTHER'})])
+    assert.equal(o.importFields.line,line);assert.equal(o.sapLineTarget,'')
+    assert.equal(o.sapMaterialNotInPo,true)
+    assert.equal(o.sapPo,'4900000001');assert.equal(o.sapItem,line===10?'00010':'')
+    assert.equal(o.sapPart,line===10?'MAT1':'')
+    const checks=detectChecks([o],[])
+    assert.deepEqual(checks.map(c=>c.kind),['material'])
+    assert.match(checks[0].title.zh,/物料号不一致/)
+    assert.match(checks[0].detail.en,line===10?/Excel line 10.*SAP line 00010/:/No material in SAP PO/)
+  }
+})
+
+test('material matching ignores quantity for unique material and disambiguates only with proven evidence',()=>{
+  const quantityChanged=unlinked();quantityChanged.importFields.qty=99
+  assert.equal(apply(quantityChanged).sapLineTarget,'00010')
+  const rows=[sapRow(),sapRow('00020',{MENGE:7})]
+  const byQuantity=apply(unlinked(),rows)
+  assert.equal(byQuantity.sapItem,'00010');assert.equal(byQuantity.sapLinkMethod,'po_material_quantity')
+  const byLine=unlinked();byLine.importFields.line=20
+  assert.equal(apply(byLine,rows).sapItem,'00020','existing matching line wins over a different quantity')
+  const anchored=unlinked();anchored.sapAnchor={po:'4900000001',item:'00020'}
+  assert.equal(apply(anchored,rows).sapItem,'00020')
+  const ambiguous=apply(unlinked(),[sapRow(),sapRow('00020')])
+  assert.equal(ambiguous.sapLineTarget,'');assert.equal(ambiguous.sapItem,'')
+  assert.equal(ambiguous.sapReferenceReason,'ambiguous')
+  assert.deepEqual(detectChecks([ambiguous],[]).map(c=>c.kind),['sap_reference'])
+})
+
+test('material matching cannot silently correct a changed PO or use another PO to fill its line',()=>{
+  const o=apply(unlinked());o.importFields.po='4900000002'
+  apply(o,[sapRow(),sapRow('00020',{EBELN:'4900000002'})])
+  assert.equal(o.sapPo,'4900000001');assert.equal(o.sapLineTarget,'')
+  assert.deepEqual(referenceKinds([o]).map(c=>c.kind),['po'])
+})
+
+test('matching material codes and ambiguous references do not become false material exceptions due to unknown units',()=>{
+  const matched=apply({...unlinked(),workbookMaterialChanged:true,unit:'EA',soUnit:'?'})
+  assert.ok(!detectChecks([matched],[]).some(c=>c.kind==='material'))
+  const ambiguous=apply({...unlinked(),workbookMaterialChanged:true},[sapRow(),sapRow('00020')])
+  assert.deepEqual(detectChecks([ambiguous],[]).map(c=>c.kind),['sap_reference'])
 })
 
 test('public workspace refresh reads new SAP snapshots and keeps last good data during an outage and reload',async()=>{
@@ -100,7 +149,7 @@ test('public workspace refresh reads new SAP snapshots and keeps last good data 
     assert.ok(detectChecks(state.orders,[]).some(c=>c.kind==='material'))
     const reloaded=await connectPublicWorkspace(p=>state=p.state,e=>{throw e},{fetcher})
     await reloaded.disconnect();assert.equal(state.orders[0].sapPart,'NEW');assert.equal(state.orders[0].sapItem,'00010')
-    assert.equal(sapLineMatches(state.orders[0]),true,'numbering convention survives page reloads')
+    assert.ok(!detectChecks(state.orders,[]).some(c=>['po_line','po_line_missing'].includes(c.kind)),'line exceptions do not return on reload')
   }finally{await cloud.disconnect()}
 })
 
@@ -170,7 +219,7 @@ test('Excel duplicates require the same PO, material and normalized line and rea
   for(const o of rows){o.sapPo='';o.sapItem='';o.sapReferenceStatus='unmatched'}
   const duplicates=()=>detectChecks(rows,[]).filter(c=>c.kind==='shared_reference')
   assert.equal(duplicates().length,2)
-  assert.match(duplicates()[0].title.zh,/Excel.*行号重复/)
+  assert.match(duplicates()[0].title.zh,/Excel.*记录重复/)
   assert.match(duplicates()[0].detail.zh,/MAT1/)
   for(const patch of [{po:'4900000002'},{line:'20'},{material:'MAT2'},{line:''},{material:''},{po:''}]){
     const original=rows[1].importFields
@@ -188,7 +237,7 @@ test('distinct workbook line numbers are not duplicates even when linked to the 
     {...order(),id:'second',sapSharedLineCount:2,importFields:{po:'4900000001',line:20,material:'MAT1'}}]
   const checks=detectChecks(rows,[])
   assert.ok(!checks.some(c=>c.kind==='shared_reference'))
-  assert.deepEqual(checks.map(c=>c.kind),['po_line'])
+  assert.deepEqual(checks,[])
 })
 
 test('duplicate SAP source line keys still fail before mutating workbook data',()=>{
@@ -197,23 +246,22 @@ test('duplicate SAP source line keys still fail before mutating workbook data',(
   assert.deepEqual(data,before)
 })
 
-test('PO and line compare current Excel against independent SAP originals, including completed records',()=>{
+test('PO mismatches remain independent while line differences are no longer exceptions, including completed records',()=>{
   const o=order()
   assert.deepEqual(referenceKinds([o]),[])
   o.importFields.po='4900000002';o.importFields.line='00020'
   const checks=referenceKinds([o])
-  assert.deepEqual(checks.map(c=>c.kind),['po','po_line'])
+  assert.deepEqual(checks.map(c=>c.kind),['po'])
   assert.match(checks[0].detail,/SAP: 4900000001 ↔ Excel: 4900000002/)
-  assert.match(checks[1].detail,/SAP: 00010 ↔ Excel: 00020/)
   assert.equal(factsFor(o,[])[0].business,'4900000002')
 })
 
-test('numeric leading zeros and surrounding spaces do not mismatch; blank or compound Excel values do',()=>{
+test('leading zeros and missing lines do not cause exceptions; compound and alphanumeric PO mismatches still do',()=>{
   const o=order();o.importFields={po:' 04900000001 ',line:' 10 '}
   assert.deepEqual(referenceKinds([o]),[])
   for(const value of ['',null,'/','—','-']) {
     o.importFields.line=value
-    assert.equal(referenceKinds([o])[0].kind,'po_line_missing')
+    assert.deepEqual(referenceKinds([o]),[])
   }
   o.importFields={po:'4900000001 / 4900000002',line:10}
   assert.equal(referenceKinds([o])[0].kind,'po')
@@ -241,7 +289,7 @@ test('zero-padded SAP lines match Excel numbers and close stale line exceptions 
 
     o.importFields.line=20
     assert.equal(sapLineMatches(o),false)
-    assert.ok(detectChecks([o],[]).some(c=>c.kind==='po_line'))
+    assert.ok(!detectChecks([o],[]).some(c=>c.kind==='po_line'))
   }
 })
 
@@ -254,18 +302,21 @@ test('missing references do not invent mismatch values and differ from failed re
   assert.equal(o.sapPo,'')
 })
 
-test('missing Line No is separate from mismatches and previous misclassification retains its history',()=>{
+test('retired line exceptions close and retain history even if no SAP reference is currently available',()=>{
   const o=order();o.importFields.line='/'
   const previous=[{id:'CHECK-row1-po_line',order:'row1',kind:'po_line',status:'处理中',note:'Existing follow-up'}]
-  const checks=reconcile([o],[],previous),missing=checks.find(c=>c.kind==='po_line_missing')
-  assert.ok(missing);assert.equal(missing.priority,'中')
+  const checks=reconcile([o],[],previous)
+  assert.ok(!checks.some(c=>c.kind==='po_line_missing'))
   assert.equal(checks.filter(c=>c.kind==='po_line'&&c.status!=='已解决').length,0)
   assert.equal(checks.find(c=>c.kind==='po_line').note,'Existing follow-up')
   assert.match(checks.find(c=>c.kind==='po_line').closure.en,/Reclassified/)
   o.importFields.line=10
   assert.deepEqual(referenceKinds([o]),[])
   o.importFields.line=20
-  assert.deepEqual(referenceKinds([o]).map(c=>c.kind),['po_line'])
+  assert.deepEqual(referenceKinds([o]),[])
+  Object.assign(o,sapReferenceFields(null))
+  const unavailable=reconcile([o],[],[...previous,{...previous[0],id:'CHECK-row1-po_line_missing',kind:'po_line_missing'}])
+  assert.ok(unavailable.filter(c=>['po_line','po_line_missing'].includes(c.kind)).every(c=>c.status==='已解决'&&c.note==='Existing follow-up'))
 })
 
 test('PO discrepancy remains open after follow-up, closes on correction and reopens on another edit',()=>{
@@ -336,7 +387,7 @@ test('saved workbook PO and line edits flow through Firebase composition, except
   }})
   try {
     const checks=referenceKinds(state.orders)
-    assert.deepEqual(checks.map(c=>c.kind),['po','po_line'])
+    assert.deepEqual(checks.map(c=>c.kind),['po'])
     assert.equal(state.orders[0].sapPo,'4900000001')
     const rows=exceptionExportRows(checks,state.orders,{language:'en'})
     const exported=Object.fromEntries(rows[0].map((key,i)=>[key,rows[1][i]]))
