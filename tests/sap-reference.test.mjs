@@ -196,7 +196,7 @@ test('SAP quantity and unit changes remain discrepancies and original comparabil
   apply(o,[sapRow()]);assert.equal(o.quantityComparable,true)
   assert.ok(!detectChecks([o],[]).some(c=>c.kind==='quantity'))
   apply(o,[sapRow('00010',{MEINS:'M'})]);assert.equal(o.quantityComparable,false)
-  assert.ok(detectChecks([o],[]).some(c=>c.kind==='unit'))
+  assert.ok(!detectChecks([o],[]).some(c=>c.kind==='unit'),'Excel has no unit column; retain SAP facts without unit exceptions')
   assert.equal(factsFor(o,[]).find(f=>f.field.en==='Unit').sap,'M')
 })
 
@@ -264,7 +264,7 @@ test('only explicit Excel OK suppresses these two checks; material, PO and unit 
     assert.equal(detectChecks(rows,[]).filter(c=>['sap_reference','shared_reference'].includes(c.kind)).length,4)
   }
   const o={...order(),importCompletion:'OK',soUnit:'?',importFields:{po:'OTHER-PO',line:10,material:'OTHER-MATERIAL'}}
-  assert.deepEqual(detectChecks([o],[]).map(c=>c.kind),['po','material','unit'])
+  assert.deepEqual(detectChecks([o],[]).map(c=>c.kind),['po','material'])
   const unmatched={...unlinked(),importCompletion:'OK',sapMaterialNotInPo:true}
   assert.deepEqual(detectChecks([unmatched],[]).map(c=>c.kind),[])
 })

@@ -127,13 +127,13 @@ export function detectChecks(orders,shipments,today=TODAY){
         const material=identityValue(o.importFields?.material??o.soPart??o.part)
         add(o,'shared_reference',label(`Excel 中 ${duplicateCount} 条记录的 PO ${business.po}、物料 ${material}、行号 ${business.item} 相同；请核对是否为重复记录或拆分发运。`,`Excel has ${duplicateCount} records with the same PO ${business.po}, material ${material} and line ${business.item}; check for duplicate records or split dispatches.`),'高')
       }
-      const sapUnit=o.sapUnit??o.unit
-      if(o.sapItem&&(!knownUnit(sapUnit)||!unitReady(o)||sapUnit!==o.unit))add(o,'unit',label(`SAP 单位：${sapUnit||'—'}；总表单位：${o.unit||'—'}；工厂单位：${o.soUnit||'—'}`,`SAP unit: ${sapUnit||'—'}; workbook unit: ${o.unit||'—'}; factory unit: ${o.soUnit||'—'}`))
+      // The current Excel schema has no unit column. SAP / inferred units are
+      // retained as facts, but are not evidence for a workbook unit comparison.
       if(o.sapSharedLineCount===1&&o.qtyKnown!==false&&Number.isFinite(o.sapQuantity)&&Number.isFinite(o.qty)&&o.sapUnit&&o.sapUnit===o.unit&&o.unit!=='?'&&o.sapPart===o.soPart&&o.sapQuantity!==o.qty)add(o,'quantity',`SAP: ${o.sapQuantity} ${o.sapUnit} ↔ Excel: ${o.qty} ${o.unit}`)
       if(isHistoricalOrder(o))continue
       // These facts now have live rules; stale import warnings must not remain
       // open after the workbook is corrected or its material mapping is confirmed.
-      const initialChecks=o.importChecks?.filter(c=>!['sap_link','material','price'].includes(c.kind))||[]
+      const initialChecks=o.importChecks?.filter(c=>!['sap_link','material','unit','price'].includes(c.kind))||[]
       if(initialChecks.length)add(o,'initialization',initialChecks.map(c=>`${c.title.zh} / ${c.title.en}`).join('; '))
       if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit}`)
       if(remainingQty(o)>0&&(!o.promisedEtd||o.promisedEtd<today||o.dispatchDelayStatus==='delayed'))add(o,'delivery',`${o.promisedEtd||'TBD'}; ${remainingQty(o)} ${o.unit}; ${o.dispatchDelayReason||''}`,'高')
@@ -164,6 +164,7 @@ export function reconcile(orders,shipments,previous=[],today=TODAY){
     const o=byOrder.get(c.order)
     // Missing reference data is not evidence that a previously found PO mismatch passed.
     if(c.kind==='po'&&o&&(!identityValue(o.sapPo)||!identityValue(o.sapItem)))return {...c}
+    if(c.kind==='unit'&&o?.imported)return {...c,status:'已解决',closure:label('当前 Excel 总表没有单位字段，暂不比较单位；原处理记录保留','The current Excel workbook has no unit column; unit comparison is suspended. Review history retained.')}
     if(workbookOk(o)&&['sap_reference','shared_reference'].includes(c.kind))return {...c,status:'已解决',closure:label('Excel 状态为 OK，此项自动结束，无需补充解释；原处理记录保留','Excel status is OK; this item is automatically resolved without further explanation. Review history retained.')}
     if(['po_line','po_line_missing'].includes(c.kind))return {...c,status:'已解决',closure:label('已改按 PO＋物料核对，行号不再单列异常；原处理记录保留','Reclassified under PO and material reconciliation; line numbers are no longer separate exceptions. Review history retained.')}
     return {...c,status:'已解决',closure:label('当前事实已通过规则核对','Current facts pass the rule')}

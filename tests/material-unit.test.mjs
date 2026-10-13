@@ -27,7 +27,7 @@ test('material exceptions and highlights require SAP material, even with stale u
 })
 
 test('material and unit issues each occupy one item, with independent corrections and exports',()=>{
-  const o=order();o.importFields.material=o.soPart='OTHER';o.soUnit='?'
+  const o={...order(),imported:false,so:'DEMO-SO'};o.importFields.material=o.soPart='OTHER';o.soUnit='?'
   const both=checks(o)
   assert.deepEqual(both.map(c=>c.kind),['material','unit'])
   assert.equal(new Set(both.map(c=>c.id)).size,2)
@@ -49,12 +49,28 @@ test('material and unit issues each occupy one item, with independent correction
   assert.equal(next.find(c=>c.kind==='material').status,'待处理')
 })
 
-test('unknown and changed units never generate a material issue or multiple unit items',()=>{
+test('Excel without a unit column does not generate unit cases for unknown or changed units',()=>{
   for(const patch of [{soUnit:'?'},{unit:'?',soUnit:'?'},{sapUnit:'ST',unit:'EA',soUnit:'M'},{sapUnit:''}]){
     const o={...order(),...patch}
-    assert.deepEqual(checks(o).map(c=>c.kind),['unit'])
+    assert.deepEqual(checks(o),[])
   }
   assert.deepEqual(checks(order()),[])
+})
+
+test('suspended Excel unit cases close with history preserved and no active export or initialization warning',()=>{
+  for(const completion of ['NG','OK','澳洲取消订单']){
+    const o={...order(),cancelled:false,qty:5,sourceRemaining:5,importCompletion:completion,
+      sapUnit:'M',unit:'EA',soUnit:'?',importChecks:[{kind:'unit',title:{zh:'单位待确认',en:'Unit confirmation required'}}]}
+    const old={id:`CHECK-${o.id}-unit`,order:o.id,kind:'unit',status:'处理中',note:'Keep note',log:[{text:'Keep history'}]}
+    const next=reconcile([o],[],[old])
+    const closed=next.find(c=>c.kind==='unit')
+    assert.equal(closed.status,'已解决');assert.match(closed.closure.zh,/暂不比较单位/)
+    assert.equal(closed.note,old.note);assert.deepEqual(closed.log,old.log)
+    assert.ok(!next.some(c=>['unit','initialization'].includes(c.kind)&&c.status!=='已解决'))
+    assert.equal(exceptionExportRows(next.filter(c=>c.kind==='unit'&&c.status!=='已解决'),[o]).length,1)
+    o.importFields.material=o.soPart='OTHER'
+    assert.ok(detectChecks([o],[]).some(c=>c.kind==='material'),'material differences are still checked')
+  }
 })
 
 test('unit approval and material approval are separate and survive persistence',()=>{
