@@ -174,6 +174,30 @@ test('numeric leading zeros and surrounding spaces do not mismatch; blank or com
   assert.equal(referenceKinds([o])[0].kind,'po')
 })
 
+test('zero-padded SAP lines match Excel numbers and close stale line exceptions without losing follow-up',()=>{
+  for(const line of [10,'10','0010',' 10 ']) {
+    const o=order();o.importFields.line=line
+    const previous=[{id:'CHECK-row1-po_line',order:'row1',kind:'po_line',status:'处理中',
+      note:'Keep the investigation',log:[{at:'2026-10-01',text:'Checked source'}]}]
+    assert.equal(sapLineMatches(o),true)
+    assert.deepEqual(referenceKinds([o]),[])
+    const closed=reconcile([o],[],previous).find(c=>c.kind==='po_line')
+    assert.equal(closed.status,'已解决')
+    assert.equal(closed.note,previous[0].note)
+    assert.deepEqual(closed.log,previous[0].log)
+    assert.equal(o.sapItem,'00010');assert.equal(o.importFields.line,line)
+
+    o.importFields.po='4900000002';o.soPart='WRONG-MATERIAL'
+    const kinds=detectChecks([o],[]).map(c=>c.kind)
+    assert.ok(kinds.includes('po'));assert.ok(kinds.includes('material'))
+    assert.ok(!kinds.includes('po_line'))
+
+    o.importFields.line=20
+    assert.equal(sapLineMatches(o),false)
+    assert.ok(detectChecks([o],[]).some(c=>c.kind==='po_line'))
+  }
+})
+
 test('missing references do not invent mismatch values and differ from failed reads',()=>{
   const o={...order(),...sapReferenceFields({})}
   assert.equal(referenceKinds([o]).length,1)
