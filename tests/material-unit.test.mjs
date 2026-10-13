@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {detectChecks,reconcile,resolveFact,workspaceOrders,materialReady,unitReady} from '../src/reconciliation.mjs'
+import {detectChecks,reconcile,resolveFact,workspaceOrders,materialReady,unitReady,materialDifference} from '../src/reconciliation.mjs'
 import {exceptionExportRows} from '../src/exception-export.mjs'
 import {projectState,hydrateState} from '../src/persistence.mjs'
 
@@ -8,6 +8,23 @@ const order=()=>({id:'separate',imported:true,cancelled:true,qty:0,sapPo:'490000
   sapReferenceStatus:'matched',sapPart:'MAT',part:'MAT',soPart:'MAT',sapUnit:'EA',unit:'EA',soUnit:'EA',
   importFields:{po:'4900000001',line:10,material:'MAT'}})
 const checks=o=>detectChecks([o],[]).filter(c=>['material','unit'].includes(c.kind))
+
+test('material exceptions and highlights require SAP material, even with stale unmatched flags',()=>{
+  for(const completion of ['NG','OK'])for(const sap of ['',null,' ','/','—','-','MAT'])for(const excel of ['',null,' ','/','—','-','MAT','OTHER']){
+    const o={...order(),importCompletion:completion,sapPart:sap,soPart:excel,
+      importFields:{...order().importFields,material:excel},sapMaterialNotInPo:true,sapReferenceReason:'material_not_in_po'}
+    const expected=sap==='MAT'&&excel!=='MAT'
+    assert.equal(materialDifference(o),expected)
+    const found=checks(o).filter(c=>c.kind==='material')
+    assert.equal(found.length,expected?1:0,JSON.stringify({completion,sap,excel}))
+    if(expected&&excel!=='OTHER')assert.match(found[0].detail.zh,/Excel 物料号为空/)
+  }
+  const o={...order(),sapPart:'',sapItem:'',importCompletion:'OK',sapMaterialNotInPo:true}
+  const old={id:`CHECK-${o.id}-material`,order:o.id,kind:'material',status:'处理中',note:'Keep note',log:[{text:'Keep history'}]}
+  const cases=reconcile([o],[],[old])
+  assert.equal(cases[0].status,'已解决');assert.equal(cases[0].note,old.note);assert.deepEqual(cases[0].log,old.log)
+  assert.equal(exceptionExportRows(cases.filter(c=>c.status!=='已解决'),[o]).length,1)
+})
 
 test('material and unit issues each occupy one item, with independent corrections and exports',()=>{
   const o=order();o.importFields.material=o.soPart='OTHER';o.soUnit='?'

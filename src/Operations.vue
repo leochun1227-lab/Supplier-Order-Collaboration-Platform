@@ -4,6 +4,7 @@ import { Button, Badge } from 'frappe-ui'
 import { ArrowUpRight, ArrowRight, Search, RefreshCw, Plus, Ship, Plane, CircleAlert, CheckCheck, Download, Filter, X, Factory, Warehouse, Wrench, Package } from 'lucide-vue-next'
 import { t as tr, dateLabel, language } from './i18n.mjs'
 import { normalizedIdentity } from './sap-reference.mjs'
+import { materialDifference } from './reconciliation.mjs'
 import { downloadExceptions } from './exception-export.mjs'
 import { managerOverview } from './manager-overview.mjs'
 import TrendChart from './TrendChart.vue'
@@ -96,7 +97,7 @@ watch([query,owner,kind,caseStatus],()=>closeCaseFilter())
 onMounted(()=>{document.addEventListener('pointerdown',outsideCaseFilter);document.addEventListener('focusin',outsideCaseFilter);document.addEventListener('keydown',keyCaseFilter);window.addEventListener('resize',moveCaseFilter);window.addEventListener('scroll',moveCaseFilter,true)})
 onBeforeUnmount(()=>{document.removeEventListener('pointerdown',outsideCaseFilter);document.removeEventListener('focusin',outsideCaseFilter);document.removeEventListener('keydown',keyCaseFilter);window.removeEventListener('resize',moveCaseFilter);window.removeEventListener('scroll',moveCaseFilter,true)})
 function poDiff(o){return !!o?.sapPo&&normalizedIdentity(o.sapPo)!==normalizedIdentity(workbookIdentity(o).po)}
-function materialDiff(o){return !!o?.sapMaterialNotInPo||!!o?.sapPart&&String(o.sapPart).trim()!==String(o.soPart??o.part??'').trim()}
+function materialDiff(o){return materialDifference(o)}
 const purposeRows=computed(()=>ageSeries.value.map(s=>({key:s.key,title:s.key==='用途待确认'?l('用途待确认','Unclassified'):tr(s.key),color:s.color,rows:management.value.open.filter(o=>(['生产订单','售后配件'].includes(o.type)?o.type:'用途待确认')===s.key)})))
 const transportRows=computed(()=>management.value.modes.filter(m=>m.mode!=='未分类'||m.rows.length).map((m,i)=>({key:m.mode,title:m.mode==='未分类'?l('运输待确认','Unclassified'):tr(m.mode),color:['#1e40af','#f97316','#7793a7','#b8c4cc'][i],rows:m.rows})))
 const transportPie=computed(()=>{

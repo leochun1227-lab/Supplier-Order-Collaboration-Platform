@@ -3,6 +3,8 @@ import { identityValue, normalizedIdentity, workbookIdentity } from './sap-refer
 export { workbookIdentity } from './sap-reference.mjs'
 export const label=(zh,en)=>({zh,en})
 const workbookOk=o=>!!o?.imported&&String(o.importCompletion??'').trim().toUpperCase()==='OK'
+const workbookMaterial=o=>identityValue(o?.importFields&&Object.hasOwn(o.importFields,'material')?o.importFields.material:o?.soPart??o?.part)
+export const materialDifference=o=>!!identityValue(o?.sapPart)&&identityValue(o.sapPart)!==workbookMaterial(o)
 export const isHistoricalOrder=o=>!!o?.imported&&(!!o.cancelled||String(o.importCompletion).toUpperCase()==='OK'||o.qtyKnown!==false&&openQty(o)<=0)
 export const isException=c=>['po','po_line','po_line_missing','sap_reference','shared_reference','source_link','unit','initialization','shipment','material','quantity'].includes(c.kind)
 export const KINDS={
@@ -100,7 +102,7 @@ export function detectChecks(orders,shipments,today=TODAY){
   for(const o of orders){
     if(o.imported){
       const business=workbookIdentity(o)
-      const materialUnmatched=o.sapMaterialNotInPo||o.sapReferenceReason==='material_not_in_po'
+      const materialUnmatched=materialDifference(o)
       if(identityValue(o.sapPo)&&normalizedIdentity(o.sapPo)!==normalizedIdentity(business.po))add(o,'po',`SAP: ${o.sapPo} ↔ Excel: ${business.po||'—'}`,'高')
       if(!workbookOk(o)&&!identityValue(o.sapItem)&&!materialUnmatched) {
         const unavailable=o.sapReferenceStatus!=='unmatched'
@@ -111,15 +113,15 @@ export function detectChecks(orders,shipments,today=TODAY){
         if(reasons[o.sapReferenceReason])found.at(-1).detail=label(`${reasons[o.sapReferenceReason].zh}；Excel PO: ${business.po||'—'} / 行: ${business.item||'—'}`,`${reasons[o.sapReferenceReason].en}; Excel PO: ${business.po||'—'} / line: ${business.item||'—'}`)
         found.at(-1).fingerprint=JSON.stringify(['sap_reference',found.at(-1).detail])
       }
-      if(materialUnmatched){
-        const material=identityValue(o.importFields?.material??o.soPart??o.part)||'—',line=identityValue(business.item)
+      if(materialUnmatched&&(o.sapMaterialNotInPo||o.sapReferenceReason==='material_not_in_po'||!workbookMaterial(o))){
+        const material=workbookMaterial(o)||'—',line=identityValue(business.item)
         add(o,'material',label(
-          o.sapPart&&line?`Excel 行号 ${business.item}／物料 ${material}；SAP 行号 ${o.sapItem}／物料 ${o.sapPart}，双方物料不一致。`:
+          material==='—'?`SAP 物料 ${o.sapPart}；Excel 物料号为空，没有与之匹配的物料。`:line?`Excel 行号 ${business.item}／物料 ${material}；SAP 行号 ${o.sapItem||'—'}／物料 ${o.sapPart}，双方物料不一致。`:
             `SAP PO ${o.sapPo||business.po} 下没有与 Excel 物料 ${material} 匹配的物料${line?`；Excel 行号 ${business.item}`:'（Excel 未填写行号）'}。`,
-          o.sapPart&&line?`Excel line ${business.item} / material ${material}; SAP line ${o.sapItem} / material ${o.sapPart}: materials differ.`:
+          material==='—'?`SAP material ${o.sapPart}; Excel material is blank with no matching material.`:line?`Excel line ${business.item} / material ${material}; SAP line ${o.sapItem||'—'} / material ${o.sapPart}: materials differ.`:
             `No material in SAP PO ${o.sapPo||business.po} matches Excel material ${material}${line?`; Excel line ${business.item}`:' (Excel line is blank)'}.`),'高')
         found.at(-1).title=label('SAP 与总表物料号不一致','SAP / workbook material mismatch')
-      }else if(identityValue(o.sapPart)&&identityValue(o.sapPart)!==identityValue(o.importFields?.material??o.soPart??o.part))add(o,'material',`SAP: ${o.sapPart} ↔ Excel: ${o.importFields?.material??o.soPart??o.part??'—'}`,'高')
+      }else if(materialUnmatched)add(o,'material',`SAP: ${o.sapPart} ↔ Excel: ${o.importFields?.material??o.soPart??o.part??'—'}`,'高')
       const duplicateCount=workbookLineCounts.get(workbookLineKeys.get(o))||0
       if(!workbookOk(o)&&duplicateCount>1){
         const material=identityValue(o.importFields?.material??o.soPart??o.part)

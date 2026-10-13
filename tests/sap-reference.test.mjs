@@ -75,7 +75,7 @@ test('latest snapshot validates complete count, hash and unique rows atomically;
   reads=[];assert.equal(await refreshSapSnapshot(data,{fetcher,previousRun:run}),run);assert.equal(reads.length,1)
 })
 
-test('PO-only matches become material exceptions and retain known lines without inventing a SAP material',()=>{
+test('PO-only matches require a nonempty SAP material to count as a material exception',()=>{
   for(const line of ['/',null,10,99]){
     const o=unlinked();o.importFields.line=line;o.importFields.material='WRONG';o.soPart='WRONG'
     apply(o,[sapRow(),sapRow('00020',{MATNR:'OTHER'})])
@@ -84,9 +84,10 @@ test('PO-only matches become material exceptions and retain known lines without 
     assert.equal(o.sapPo,'4900000001');assert.equal(o.sapItem,line===10?'00010':'')
     assert.equal(o.sapPart,line===10?'MAT1':'')
     const checks=detectChecks([o],[])
-    assert.deepEqual(checks.map(c=>c.kind),['material'])
-    assert.match(checks[0].title.zh,/物料号不一致/)
-    assert.match(checks[0].detail.en,line===10?/Excel line 10.*SAP line 00010/:/No material in SAP PO/)
+    assert.deepEqual(checks.map(c=>c.kind),[line===10?'material':'sap_reference'])
+    if(line===10){assert.match(checks[0].title.zh,/物料号不一致/);assert.match(checks[0].detail.en,/Excel line 10.*SAP line 00010/)}
+    o.importCompletion='OK'
+    assert.deepEqual(detectChecks([o],[]).map(c=>c.kind),line===10?['material']:[])
   }
 })
 
@@ -265,7 +266,7 @@ test('only explicit Excel OK suppresses these two checks; material, PO and unit 
   const o={...order(),importCompletion:'OK',soUnit:'?',importFields:{po:'OTHER-PO',line:10,material:'OTHER-MATERIAL'}}
   assert.deepEqual(detectChecks([o],[]).map(c=>c.kind),['po','material','unit'])
   const unmatched={...unlinked(),importCompletion:'OK',sapMaterialNotInPo:true}
-  assert.deepEqual(detectChecks([unmatched],[]).map(c=>c.kind),['material'])
+  assert.deepEqual(detectChecks([unmatched],[]).map(c=>c.kind),[])
 })
 
 test('distinct workbook line numbers are not duplicates even when linked to the same SAP line',()=>{
