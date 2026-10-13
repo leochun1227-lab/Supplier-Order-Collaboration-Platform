@@ -12,6 +12,7 @@ test('checks distinguish facts from timing and deduplicate repeat runs',()=>{
   const {orders,shipments}=fixture();let cases=reconcile(orders,shipments)
   assert.equal(cases.filter(c=>c.kind==='shipment').length,2)
   assert.equal(cases.filter(c=>c.kind==='material').length,1)
+  assert.equal(cases.filter(c=>c.kind==='unit').length,1)
   assert.equal(cases.filter(c=>c.kind==='price').length,1)
   assert.equal(cases.filter(c=>c.kind==='reference').length,1)
   assert.deepEqual(reconcile(orders,shipments,cases),cases)
@@ -20,14 +21,17 @@ test('checks distinguish facts from timing and deduplicate repeat runs',()=>{
 test('mapping approval is scoped to the exact code and unit pair, without rewriting SAP',()=>{
   const {orders,shipments}=fixture(),o=orders.at(-1),original=o.sapPart
   resolveFact(o,'material',{factor:1},'Confirmed scoped mapping')
+  assert.ok(!mappingReady(o),'material confirmation does not approve units')
+  resolveFact(o,'unit',{factor:1},'Confirmed conversion separately')
   assert.ok(mappingReady(o));assert.equal(o.sapPart,original)
   assert.ok(!detectChecks(orders,shipments).some(c=>c.order===o.id&&c.kind==='material'))
   o.soPart='CHANGED-CODE';assert.ok(!mappingReady(o))
-  assert.throws(()=>resolveFact(o,'material',{factor:0},'Invalid conversion'))
+  assert.throws(()=>resolveFact(o,'unit',{factor:0},'Invalid conversion'))
 })
 test('confirmed conversion is checked against SO quantity, not silently treated as equal',()=>{
   const {orders,shipments}=fixture(),o=orders.at(-1)
-  resolveFact(o,'material',{factor:2},'Confirmed 2 metres per factory unit')
+  resolveFact(o,'material',{},'Confirmed material correspondence')
+  resolveFact(o,'unit',{factor:2},'Confirmed 2 metres per factory unit')
   assert.ok(detectChecks(orders,shipments).some(c=>c.order===o.id&&c.kind==='quantity'))
   o.soQty=100;assert.ok(!detectChecks(orders,shipments).some(c=>c.order===o.id&&c.kind==='quantity'))
 })

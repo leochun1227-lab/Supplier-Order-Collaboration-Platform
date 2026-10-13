@@ -11,10 +11,10 @@ export const KINDS={
   sap_reference:label('SAP 参考记录待关联','SAP reference requires linking'),
   shared_reference:label('Excel 记录重复待核对','Duplicate workbook records require review'),
   source_link:label('补充表记录待关联','Supplement row requires linking'),
-  unit:label('SAP 计量单位变化待核对','SAP unit change requires review'),
+  unit:label('单位待确认','Unit confirmation required'),
   initialization:label('初始化记录待核对','Initialization review'),
   shipment:label('报发与 SAP 待核对','Reported shipment / SAP'),
-  material:label('物料与单位待确认','Material / unit mapping'),
+  material:label('物料号待确认','Material confirmation required'),
   reference:label('SO 关联待补充','Missing SO reference'),
   price:label('价格待确认','Price verification'),
   delivery:label('发运承诺待跟进','Dispatch commitment'),
@@ -58,7 +58,10 @@ export const allocations=s=>s.allocations||[{order:s.order,qty:s.qty,receivedQty
 export const relatedShipments=(o,shipments)=>shipments.filter(s=>allocations(s).some(a=>a.order===o.id))
 export const priceSignature=o=>JSON.stringify([o.currency,o.unitPrice,o.priceUnit||1,o.unit||'EA'])
 export const priceReady=o=>(!o.imported||o.quantityComparable)&&o.priceConfirmed!==false&&(!o.priceConfirmation||o.priceConfirmation===priceSignature(o))&&o.currency==='AUD'&&Number.isFinite(o.unitPrice)&&o.unitPrice>=0&&(o.priceUnit||1)>0
-export const mappingReady=o=>o.sapPart===o.soPart&&o.unit===o.soUnit||!!(o.mapping&&o.mapping.sapPart===o.sapPart&&o.mapping.soPart===o.soPart&&o.mapping.unit===o.unit&&o.mapping.soUnit===o.soUnit&&o.mapping.factor>0)
+const knownUnit=value=>!!identityValue(value)&&identityValue(value)!=='?'
+export const materialReady=o=>!!identityValue(o.sapPart)&&identityValue(o.sapPart)===identityValue(o.soPart)||!!(!o.imported&&o.mapping&&o.mapping.materialConfirmed!==false&&(o.mapping.materialConfirmed||o.mapping.factor>0)&&o.mapping.sapPart===o.sapPart&&o.mapping.soPart===o.soPart)
+export const unitReady=o=>knownUnit(o.unit)&&knownUnit(o.soUnit)&&(o.unit===o.soUnit||!!(o.mapping&&o.mapping.unitConfirmed!==false&&o.mapping.sapPart===o.sapPart&&o.mapping.soPart===o.soPart&&o.mapping.unit===o.unit&&o.mapping.soUnit===o.soUnit&&o.mapping.factor>0))
+export const mappingReady=o=>materialReady(o)&&unitReady(o)
 export function groupedQuantity(orders,quantity){
   const groups={};for(const o of orders){if(o.imported&&!o.quantityComparable)continue;const n=quantity(o);if(Number.isFinite(n)&&n)groups[o.unit||'EA']=(groups[o.unit||'EA']||0)+n}return groups
 }
@@ -70,8 +73,8 @@ export function factsFor(o,shipments){
       {field:label('采购订单 PO','Purchase order'),sap:o.sapPo||'—',business:workbookIdentity(o).po||'—',source:label('Excel 总表','Excel workbook'),adopted:label('双方原值保留','Both originals retained')},
       {field:label('采购订单行','Purchase order line'),sap:o.sapItem||'—',business:workbookIdentity(o).item||'—',source:label('Excel 总表','Excel workbook'),adopted:label('双方原值保留','Both originals retained')},
     ]:[]),
-    {field:label('物料编码','Material'),sap:o.sapPart||'—',business:o.soPart??o.part??'—',source:label('工厂 SO／平台','Factory SO / platform'),adopted:mappingReady(o)?label('对应关系已确认','Mapping confirmed'):label('双方原值保留','Both originals retained')},
-    {field:label('计量单位','Unit'),sap:o.sapUnit??o.unit??'EA',business:o.soUnit||o.unit||'EA',source:label('工厂 SO','Factory SO'),adopted:o.mapping?`1 ${o.soUnit} = ${o.mapping.factor} ${o.unit}`:label('按原单位展示','Shown in original units')},
+    {field:label('物料编码','Material'),sap:o.sapPart||'—',business:o.soPart??o.part??'—',source:label('工厂 SO／平台','Factory SO / platform'),adopted:materialReady(o)?label('对应关系已确认','Mapping confirmed'):label('双方原值保留','Both originals retained')},
+    {field:label('计量单位','Unit'),sap:o.sapUnit??o.unit??'—',business:o.soUnit||'—',source:label('工厂 SO','Factory SO'),adopted:o.mapping&&unitReady(o)?`1 ${o.soUnit} = ${o.mapping.factor} ${o.unit}`:label('按原单位展示','Shown in original units')},
     {field:label('发运数量','Dispatched quantity'),sap:`${o.shipped??'—'} ${o.unit||'EA'}`,business:`${reportedQty(o)} ${o.unit||'EA'}`,source:o.cooperationSource||label('平台','Platform'),adopted:label('分别保留报发与过账','Report and PGI kept separately')},
     {field:label('PO 单价','PO unit price'),sap:`${o.currency} ${o.unitPrice??'—'} / ${o.priceUnit||1} ${o.unit||'EA'}`,business:'—',source:'SAP PO',adopted:priceReady(o)?label('纳入已确认货值','Included in confirmed value'):label('暂不计入货值','Excluded from confirmed value')},
     {field:label('SAP 交货单','SAP delivery'),sap:related.map(s=>s.sapDelivery||'—').join(' / ')||'—',business:related.map(s=>s.id).join(' / ')||'—',source:label('装运批次','Shipment batch'),adopted:label('按批次关联','Linked by batch')},
@@ -115,13 +118,14 @@ export function detectChecks(orders,shipments,today=TODAY){
           o.sapPart&&line?`Excel line ${business.item} / material ${material}; SAP line ${o.sapItem} / material ${o.sapPart}: materials differ.`:
             `No material in SAP PO ${o.sapPo||business.po} matches Excel material ${material}${line?`; Excel line ${business.item}`:' (Excel line is blank)'}.`),'高')
         found.at(-1).title=label('SAP 与总表物料号不一致','SAP / workbook material mismatch')
-      }else if(identityValue(o.sapPart)&&identityValue(o.sapPart)!==identityValue(o.importFields?.material??o.soPart??o.part))add(o,'material',`${o.sapPart} / ${o.unit} ↔ ${o.importFields?.material??o.soPart??o.part??'—'} / ${o.soUnit}`,'高')
+      }else if(identityValue(o.sapPart)&&identityValue(o.sapPart)!==identityValue(o.importFields?.material??o.soPart??o.part))add(o,'material',`SAP: ${o.sapPart} ↔ Excel: ${o.importFields?.material??o.soPart??o.part??'—'}`,'高')
       const duplicateCount=workbookLineCounts.get(workbookLineKeys.get(o))||0
       if(duplicateCount>1){
         const material=identityValue(o.importFields?.material??o.soPart??o.part)
         add(o,'shared_reference',label(`Excel 中 ${duplicateCount} 条记录的 PO ${business.po}、物料 ${material}、行号 ${business.item} 相同；请核对是否为重复记录或拆分发运。`,`Excel has ${duplicateCount} records with the same PO ${business.po}, material ${material} and line ${business.item}; check for duplicate records or split dispatches.`),'高')
       }
-      if(o.sapUnit&&o.unit&&o.unit!=='?'&&o.sapUnit!==o.unit)add(o,'unit',`SAP: ${o.sapUnit} ↔ Excel: ${o.unit}`)
+      const sapUnit=o.sapUnit??o.unit
+      if(o.sapItem&&(!knownUnit(sapUnit)||!unitReady(o)||sapUnit!==o.unit))add(o,'unit',label(`SAP 单位：${sapUnit||'—'}；总表单位：${o.unit||'—'}；工厂单位：${o.soUnit||'—'}`,`SAP unit: ${sapUnit||'—'}; workbook unit: ${o.unit||'—'}; factory unit: ${o.soUnit||'—'}`))
       if(o.sapSharedLineCount===1&&o.qtyKnown!==false&&Number.isFinite(o.sapQuantity)&&Number.isFinite(o.qty)&&o.sapUnit&&o.sapUnit===o.unit&&o.unit!=='?'&&o.sapPart===o.soPart&&o.sapQuantity!==o.qty)add(o,'quantity',`SAP: ${o.sapQuantity} ${o.sapUnit} ↔ Excel: ${o.qty} ${o.unit}`)
       if(isHistoricalOrder(o))continue
       // These facts now have live rules; stale import warnings must not remain
@@ -134,7 +138,8 @@ export function detectChecks(orders,shipments,today=TODAY){
       if(delayed.length)add(o,'logistics',delayed.map(s=>`${s.id}: ETA ${s.eta||'TBD'}; ${s.delayReason||'—'}`).join(' / '),'高')
       continue
     }
-    if(o.so&&!mappingReady(o))add(o,'material',`${o.sapPart} / ${o.unit} ↔ ${o.soPart} / ${o.soUnit}`)
+    if(o.so&&!materialReady(o))add(o,'material',`SAP: ${o.sapPart||'—'} ↔ SO: ${o.soPart||'—'}`)
+    if(o.so&&!unitReady(o))add(o,'unit',`SAP: ${o.unit||'—'} ↔ SO: ${o.soUnit||'—'}`)
     if(!o.so)add(o,'reference',`${o.po} / ${o.item}`)
     if(!priceReady(o))add(o,'price',`${o.currency} ${o.unitPrice} / ${o.priceUnit||1} ${o.unit}`)
     const unposted=linkedShipments(o).filter(s=>!s.sapPosted)
@@ -168,9 +173,15 @@ export function updateCase(cases,id,{owner,due,note},now=TODAY){
 export function validDate(d){return /^\d{4}-\d{2}-\d{2}$/.test(d||'')&&!Number.isNaN(Date.parse(d))&&new Date(d).toISOString().slice(0,10)===d}
 export function resolveFact(order,kind,input,note,today=TODAY){
   if(!note?.trim())throw new Error('evidence_required')
-  if(kind==='material'){
-    if(!Number.isFinite(Number(input.factor))||Number(input.factor)<=0)throw new Error('factor_invalid')
-    order.mapping={sapPart:order.sapPart,soPart:order.soPart,unit:order.unit,soUnit:order.soUnit,factor:Number(input.factor),note,at:today}
+  if(kind==='material'||kind==='unit'){
+    if(order.imported)throw new Error('source_required')
+    if(kind==='unit'&&(!Number.isFinite(Number(input.factor))||Number(input.factor)<=0))throw new Error('factor_invalid')
+    if(kind==='unit'&&(!knownUnit(order.unit)||!knownUnit(order.soUnit)))throw new Error('source_required')
+    const prior=order.mapping||{}
+    order.mapping={...prior,sapPart:order.sapPart,soPart:order.soPart,unit:order.unit,soUnit:order.soUnit,
+      materialConfirmed:kind==='material'||materialReady(order),unitConfirmed:kind==='unit'||unitReady(order),
+      factor:kind==='unit'?Number(input.factor):unitReady(order)?prior.factor||1:1,
+      [kind+'Note']:note,[kind+'At']:today,note,at:today}
   }else if(kind==='price'){
     if(order.currency!=='AUD')throw new Error('currency_unconfirmed')
     order.priceConfirmed=true;order.priceConfirmation=priceSignature(order)

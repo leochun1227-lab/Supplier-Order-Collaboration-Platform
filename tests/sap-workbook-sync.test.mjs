@@ -159,9 +159,9 @@ test('an anchored PO or material edit is an exception, never a duplicate new SAP
   setCell(book.sheets[0],'row0',8,'DIFFERENT-MATERIAL')
   const orders=linked(book,rows),completed=orders[0]
   assert.equal(isHistoricalOrder(completed),true,'explicit OK remains completed even when remaining quantity is positive')
-  resolveFact(completed,'material',{factor:1},'Mapping confirmed')
+  assert.throws(()=>resolveFact(completed,'material',{factor:1},'Mapping confirmed'),/source_required/)
   const checks=reconcile(orders,[])
-  assert.deepEqual(checks.filter(c=>c.order===completed.id).map(c=>c.kind),['po','material'])
+  assert.deepEqual(checks.filter(c=>c.order===completed.id).map(c=>c.kind),['po','material','unit'])
   assert.ok(checks.every(isException))
   const exported=exceptionExportRows(checks,orders,{language:'en'})
   assert.ok(exported.slice(1).some(row=>row.includes('DIFFERENT-PO')&&row.includes('4500000001')&&row.includes('DIFFERENT-MATERIAL')))

@@ -399,6 +399,24 @@ test('UI actions update shared facts, close matching cases and preserve reported
   assert.match(r.text,/Passed \/ resolved/)
 })
 
+test('material and unit review dialogs expose separate controls in both languages',async()=>{
+  const order=reconciliation.workspaceOrders().at(-1),Review=component('ReviewDialog.vue')
+  for(const language of ['zh','en']){
+    i18n.setLanguage(language)
+    const view=async kind=>renderToString(Vue.createSSRApp(Review,{modelValue:true,role:'buyer',order,
+      issue:{id:kind,kind,title:reconciliation.KINDS[kind]},perform:()=>{}}))
+    const material=await view('material'),unit=await view('unit')
+    assert.doesNotMatch(material,/type="number"/)
+    assert.match(unit,/type="number"/)
+    assert.match(material,language==='zh'?/物料号待确认/:/Material confirmation required/)
+    assert.match(unit,language==='zh'?/单位待确认/:/Unit confirmation required/)
+    const imported=await renderToString(Vue.createSSRApp(Review,{modelValue:true,role:'buyer',order:{...order,imported:true},
+      issue:{id:'unit',kind:'unit',title:reconciliation.KINDS.unit},perform:()=>{}}))
+    assert.doesNotMatch(imported,/type="number"/)
+    assert.doesNotMatch(imported,/Confirm &amp; recheck|确认并重新核对/)
+  }
+})
+
 test('logistics editor updates all linked orders and renders separate inputs in both languages',async()=>{
   i18n.setLanguage('en')
   const r=await render({page:'shipments'},s=>{
