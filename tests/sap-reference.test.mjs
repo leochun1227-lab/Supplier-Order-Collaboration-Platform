@@ -232,6 +232,42 @@ test('Excel duplicates require the same PO, material and normalized line and rea
   assert.equal(duplicates().length,0)
 })
 
+test('Excel OK automatically resolves reference and duplicate cases, preserves history and reopens on NG',()=>{
+  const rows=[{...unlinked(),importCompletion:'NG'},{...unlinked(),id:'second',importCompletion:'NG'}]
+  const kinds=['sap_reference','shared_reference']
+  let cases=reconcile(rows,[]).filter(c=>kinds.includes(c.kind))
+  assert.equal(cases.length,4)
+  for(const c of cases){c.status='处理中';c.note='Existing follow-up';c.log=[{text:'Keep history'}]}
+  rows[0].importCompletion=' ok '
+  cases=reconcile(rows,[],cases)
+  assert.equal(cases.filter(c=>c.order==='second'&&c.status!=='已解决').length,2,'NG row is still checked alongside an OK duplicate')
+  for(const c of cases.filter(c=>c.order===rows[0].id)){
+    assert.equal(c.status,'已解决');assert.equal(c.note,'Existing follow-up')
+    assert.deepEqual(c.log,[{text:'Keep history'}]);assert.match(c.closure.zh,/Excel 状态为 OK/)
+  }
+  rows[1].importCompletion='OK'
+  cases=reconcile(rows,[],cases)
+  assert.ok(cases.every(c=>c.status==='已解决'))
+  assert.deepEqual(detectChecks(rows,[]),[])
+  assert.equal(exceptionExportRows(cases.filter(c=>c.status!=='已解决'),rows).length,1)
+  rows[0].importCompletion='NG'
+  cases=reconcile(rows,[],cases)
+  const reopened=cases.filter(c=>c.order===rows[0].id)
+  assert.equal(reopened.length,2)
+  assert.ok(reopened.every(c=>c.status==='待处理'&&c.note==='Existing follow-up'&&!c.closure))
+})
+
+test('only explicit Excel OK suppresses these two checks; material, PO and unit differences stay active',()=>{
+  for(const completion of ['NG','','澳洲取消订单']){
+    const rows=[{...unlinked(),importCompletion:completion,qty:0},{...unlinked(),id:'second',importCompletion:completion,qty:0}]
+    assert.equal(detectChecks(rows,[]).filter(c=>['sap_reference','shared_reference'].includes(c.kind)).length,4)
+  }
+  const o={...order(),importCompletion:'OK',soUnit:'?',importFields:{po:'OTHER-PO',line:10,material:'OTHER-MATERIAL'}}
+  assert.deepEqual(detectChecks([o],[]).map(c=>c.kind),['po','material','unit'])
+  const unmatched={...unlinked(),importCompletion:'OK',sapMaterialNotInPo:true}
+  assert.deepEqual(detectChecks([unmatched],[]).map(c=>c.kind),['material'])
+})
+
 test('distinct workbook line numbers are not duplicates even when linked to the same SAP line',()=>{
   const rows=[{...order(),sapSharedLineCount:2,importFields:{po:'4900000001',line:10,material:'MAT1'}},
     {...order(),id:'second',sapSharedLineCount:2,importFields:{po:'4900000001',line:20,material:'MAT1'}}]

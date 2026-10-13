@@ -2,6 +2,7 @@ import { TODAY, seedOrders, seedShipments, daysLate, openQty } from './domain.mj
 import { identityValue, normalizedIdentity, workbookIdentity } from './sap-reference.mjs'
 export { workbookIdentity } from './sap-reference.mjs'
 export const label=(zh,en)=>({zh,en})
+const workbookOk=o=>!!o?.imported&&String(o.importCompletion??'').trim().toUpperCase()==='OK'
 export const isHistoricalOrder=o=>!!o?.imported&&(!!o.cancelled||String(o.importCompletion).toUpperCase()==='OK'||o.qtyKnown!==false&&openQty(o)<=0)
 export const isException=c=>['po','po_line','po_line_missing','sap_reference','shared_reference','source_link','unit','initialization','shipment','material','quantity'].includes(c.kind)
 export const KINDS={
@@ -101,7 +102,7 @@ export function detectChecks(orders,shipments,today=TODAY){
       const business=workbookIdentity(o)
       const materialUnmatched=o.sapMaterialNotInPo||o.sapReferenceReason==='material_not_in_po'
       if(identityValue(o.sapPo)&&normalizedIdentity(o.sapPo)!==normalizedIdentity(business.po))add(o,'po',`SAP: ${o.sapPo} ↔ Excel: ${business.po||'—'}`,'高')
-      if(!identityValue(o.sapItem)&&!materialUnmatched) {
+      if(!workbookOk(o)&&!identityValue(o.sapItem)&&!materialUnmatched) {
         const unavailable=o.sapReferenceStatus!=='unmatched'
         add(o,'sap_reference',label(
           `${unavailable?'SAP 参考数据未能读取，请刷新重试':'当前导入参考中未建立唯一 SAP 关联，需核实来源'}；Excel PO: ${business.po||'—'} / 行: ${business.item||'—'}`,
@@ -120,7 +121,7 @@ export function detectChecks(orders,shipments,today=TODAY){
         found.at(-1).title=label('SAP 与总表物料号不一致','SAP / workbook material mismatch')
       }else if(identityValue(o.sapPart)&&identityValue(o.sapPart)!==identityValue(o.importFields?.material??o.soPart??o.part))add(o,'material',`SAP: ${o.sapPart} ↔ Excel: ${o.importFields?.material??o.soPart??o.part??'—'}`,'高')
       const duplicateCount=workbookLineCounts.get(workbookLineKeys.get(o))||0
-      if(duplicateCount>1){
+      if(!workbookOk(o)&&duplicateCount>1){
         const material=identityValue(o.importFields?.material??o.soPart??o.part)
         add(o,'shared_reference',label(`Excel 中 ${duplicateCount} 条记录的 PO ${business.po}、物料 ${material}、行号 ${business.item} 相同；请核对是否为重复记录或拆分发运。`,`Excel has ${duplicateCount} records with the same PO ${business.po}, material ${material} and line ${business.item}; check for duplicate records or split dispatches.`),'高')
       }
@@ -161,6 +162,7 @@ export function reconcile(orders,shipments,previous=[],today=TODAY){
     const o=byOrder.get(c.order)
     // Missing reference data is not evidence that a previously found PO mismatch passed.
     if(c.kind==='po'&&o&&(!identityValue(o.sapPo)||!identityValue(o.sapItem)))return {...c}
+    if(workbookOk(o)&&['sap_reference','shared_reference'].includes(c.kind))return {...c,status:'已解决',closure:label('Excel 状态为 OK，此项自动结束，无需补充解释；原处理记录保留','Excel status is OK; this item is automatically resolved without further explanation. Review history retained.')}
     if(['po_line','po_line_missing'].includes(c.kind))return {...c,status:'已解决',closure:label('已改按 PO＋物料核对，行号不再单列异常；原处理记录保留','Reclassified under PO and material reconciliation; line numbers are no longer separate exceptions. Review history retained.')}
     return {...c,status:'已解决',closure:label('当前事实已通过规则核对','Current facts pass the rule')}
   })]
