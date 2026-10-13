@@ -150,6 +150,53 @@ test('SAP quantity and unit changes remain discrepancies and original comparabil
   assert.equal(factsFor(o,[]).find(f=>f.field.en==='Unit').sap,'M')
 })
 
+test('different Excel materials sharing a SAP anchor produce material differences, not duplicate lines',()=>{
+  const rows=['P18300185','P17105592'].map((material,i)=>({...order(),id:`row${i}`,part:material,soPart:material,sapPo:'',sapItem:'',
+    importFields:{po:'4900001245',line:i?' 10 ':'00010',material}}))
+  applySapSnapshotReferences({orders:rows},[sapRow('00010',{EBELN:'4900001245',MATNR:'P18300185'})],1789104255050)
+  assert.deepEqual(rows.map(o=>o.sapSharedLineCount),[2,2])
+  assert.deepEqual(detectChecks(rows,[]).map(c=>[c.order,c.kind]),[['row1','material']])
+  const previous=[{id:'CHECK-row1-shared_reference',order:'row1',kind:'shared_reference',status:'处理中',
+    note:'Keep investigation',log:[{at:'2026-10-01',text:'Checked source'}]}]
+  const closed=reconcile(rows,[],previous).find(c=>c.kind==='shared_reference')
+  assert.equal(closed.status,'已解决');assert.equal(closed.note,previous[0].note)
+  assert.deepEqual(closed.log,previous[0].log)
+})
+
+test('Excel duplicates require the same PO, material and normalized line and react to current edits',()=>{
+  const rows=[{...order(),importFields:{po:'4900000001',line:'10',material:'MAT1'}},
+    {...order(),id:'second',importFields:{po:' 04900000001 ',line:' 00010 ',material:' MAT1 '}}]
+  // The rule must work without an association count or even a SAP reference.
+  for(const o of rows){o.sapPo='';o.sapItem='';o.sapReferenceStatus='unmatched'}
+  const duplicates=()=>detectChecks(rows,[]).filter(c=>c.kind==='shared_reference')
+  assert.equal(duplicates().length,2)
+  assert.match(duplicates()[0].title.zh,/Excel.*行号重复/)
+  assert.match(duplicates()[0].detail.zh,/MAT1/)
+  for(const patch of [{po:'4900000002'},{line:'20'},{material:'MAT2'},{line:''},{material:''},{po:''}]){
+    const original=rows[1].importFields
+    rows[1].importFields={...original,...patch}
+    assert.equal(duplicates().length,0,JSON.stringify(patch))
+    rows[1].importFields=original
+  }
+  assert.equal(duplicates().length,2)
+  rows[1].imported=false
+  assert.equal(duplicates().length,0)
+})
+
+test('distinct workbook line numbers are not duplicates even when linked to the same SAP line',()=>{
+  const rows=[{...order(),sapSharedLineCount:2,importFields:{po:'4900000001',line:10,material:'MAT1'}},
+    {...order(),id:'second',sapSharedLineCount:2,importFields:{po:'4900000001',line:20,material:'MAT1'}}]
+  const checks=detectChecks(rows,[])
+  assert.ok(!checks.some(c=>c.kind==='shared_reference'))
+  assert.deepEqual(checks.map(c=>c.kind),['po_line'])
+})
+
+test('duplicate SAP source line keys still fail before mutating workbook data',()=>{
+  const data={orders:[unlinked()]},before=structuredClone(data)
+  assert.throws(()=>applySapSnapshotReferences(data,[sapRow(),sapRow(' 10 ')],1789104255050),/duplicate_sap_reference/)
+  assert.deepEqual(data,before)
+})
+
 test('PO and line compare current Excel against independent SAP originals, including completed records',()=>{
   const o=order()
   assert.deepEqual(referenceKinds([o]),[])

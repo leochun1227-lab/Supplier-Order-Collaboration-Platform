@@ -9,7 +9,7 @@ export const KINDS={
   po_line:label('SAP 与总表订单行不一致','SAP / workbook line mismatch'),
   po_line_missing:label('总表订单行缺失','Workbook order line missing'),
   sap_reference:label('SAP 参考记录待关联','SAP reference requires linking'),
-  shared_reference:label('多条总表记录共用 SAP 行','Multiple workbook records share a SAP line'),
+  shared_reference:label('Excel 同一 PO、物料的行号重复','Duplicate Excel line for the same PO and material'),
   source_link:label('补充表记录待关联','Supplement row requires linking'),
   unit:label('SAP 计量单位变化待核对','SAP unit change requires review'),
   initialization:label('初始化记录待核对','Initialization review'),
@@ -79,6 +79,17 @@ export function factsFor(o,shipments){
 }
 export function detectChecks(orders,shipments,today=TODAY){
   const found=[], shipmentsByOrder=new Map()
+  // Count actual workbook identities, not the number of links to a SAP anchor.
+  // Recompute from current cells so corrections take effect without a SAP refresh.
+  const workbookLineKeys=new Map(),workbookLineCounts=new Map()
+  for(const o of orders){
+    if(!o.imported)continue
+    const business=workbookIdentity(o),po=normalizedIdentity(business.po),line=normalizedIdentity(business.item)
+    const material=identityValue(o.importFields?.material??o.soPart??o.part)
+    if(!po||!line||!material)continue
+    const key=JSON.stringify([po,material,line])
+    workbookLineKeys.set(o,key);workbookLineCounts.set(key,(workbookLineCounts.get(key)||0)+1)
+  }
   for(const shipment of shipments)for(const id of new Set(allocations(shipment).map(a=>a.order))){if(!shipmentsByOrder.has(id))shipmentsByOrder.set(id,[]);shipmentsByOrder.get(id).push(shipment)}
   const linkedShipments=o=>shipmentsByOrder.get(o.id)||[]
   const add=(o,kind,evidence,priority='中')=>found.push({id:`CHECK-${o.id}-${kind}`,order:o.id,kind,category:'数据问题',title:KINDS[kind],detail:evidence,owner:o.buyer,priority,due:today,status:'待处理',note:'',fingerprint:JSON.stringify([kind,evidence]),rule:true})
@@ -104,7 +115,11 @@ export function detectChecks(orders,shipments,today=TODAY){
         found.at(-1).fingerprint=JSON.stringify(['sap_reference',found.at(-1).detail])
       }
       if(o.sapPart&&o.sapPart!==o.soPart||(o.workbookMaterialChanged&&!mappingReady(o)))add(o,'material',`${o.sapPart||'—'} / ${o.unit} ↔ ${o.soPart||'—'} / ${o.soUnit}`,'高')
-      if(o.sapSharedLineCount>1)add(o,'shared_reference',label(`${o.sapSharedLineCount} 条总表记录关联 SAP ${o.sapPo} / ${o.sapItem}；可能是拆分发运，不自动汇总订购数量。`,`${o.sapSharedLineCount} workbook records link to SAP ${o.sapPo} / ${o.sapItem}; may be split dispatches. Ordered quantities are not automatically summed.`))
+      const duplicateCount=workbookLineCounts.get(workbookLineKeys.get(o))||0
+      if(duplicateCount>1){
+        const material=identityValue(o.importFields?.material??o.soPart??o.part)
+        add(o,'shared_reference',label(`Excel 中 ${duplicateCount} 条记录的 PO ${business.po}、物料 ${material}、行号 ${business.item} 相同；同一 PO、同一物料下行号重复，请核对。`,`Excel has ${duplicateCount} records with the same PO ${business.po}, material ${material} and line ${business.item}; review the duplicate line numbers.`),'高')
+      }
       if(o.sapUnit&&o.unit&&o.unit!=='?'&&o.sapUnit!==o.unit)add(o,'unit',`SAP: ${o.sapUnit} ↔ Excel: ${o.unit}`)
       if(o.sapSharedLineCount===1&&o.qtyKnown!==false&&Number.isFinite(o.sapQuantity)&&Number.isFinite(o.qty)&&o.sapUnit&&o.sapUnit===o.unit&&o.unit!=='?'&&o.sapPart===o.soPart&&o.sapQuantity!==o.qty)add(o,'quantity',`SAP: ${o.sapQuantity} ${o.sapUnit} ↔ Excel: ${o.qty} ${o.unit}`)
       if(isHistoricalOrder(o))continue
